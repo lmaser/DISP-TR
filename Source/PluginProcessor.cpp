@@ -2,6 +2,9 @@
 #include "PluginEditor.h"
 #include <fstream>
 
+// Set to 1 to enable debug file logging (writes to disk can cause CPU spikes).
+#define DISPTR_ENABLE_DEBUG 0
+
 namespace
 {
     constexpr bool kUseActiveStageCoeffPropagation = false;
@@ -260,7 +263,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     startTransitionIfNeeded (amountNow, series, reverse, freqNow, resoNow);
 
-    // Debug: record parameter sources to help diagnose resonance not updating
+    // Debug file logging is disabled by default because of I/O cost.
+#if DISPTR_ENABLE_DEBUG
     try
     {
         std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/param_debug.txt", std::ios::app);
@@ -282,6 +286,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         }
     }
     catch (...) {}
+#endif
 
     if (! inTransition)
     {
@@ -736,6 +741,7 @@ void DisperserAudioProcessor::Engine::init (double sr)
     resoLeft.reset();
     resoRight.reset();
     resoMix = 0.0f;
+    resoMixTarget = 0.0f;
 }
 
 void DisperserAudioProcessor::Engine::setTopology (int newAmount, int newSeries, bool newReverse,
@@ -842,7 +848,8 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
     if (numStages <= 0 || sampleRate <= 0.0)
         return;
 
-    // Debug: log frequency/coefficient calculation to help diagnose mapping issues
+    // Debug file logging can be enabled for development; disabled by default.
+#if DISPTR_ENABLE_DEBUG
     try
     {
         std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
@@ -857,6 +864,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         }
     }
     catch (...) {}
+#endif
 
     const float n = amountNorm (a);
     const float spreadOct = 0.10f + 2.90f * std::pow (n, 0.50f);
@@ -898,6 +906,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         fMax = fMin * 1.0001f;
 
     // Debug: log final fMin/fMax to help diagnose low-frequency centering
+#if DISPTR_ENABLE_DEBUG
     try
     {
         std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
@@ -909,6 +918,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         }
     }
     catch (...) {}
+#endif
 
     const float ratio = fMax / fMin;
     const int denom = juce::jmax (1, numStages - 1);
@@ -945,6 +955,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         // Debug: record first few stage frequencies and coefficients (before and after scaling)
         if (i < 4)
         {
+#if DISPTR_ENABLE_DEBUG
             try
             {
                 std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
@@ -960,6 +971,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
                 }
             }
             catch (...) {}
+#endif
         }
 
         // Apply aScale in the tan(omega/2) domain to avoid shifting the
@@ -977,6 +989,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         // Log scaled coefficient and reconstructed frequency
         if (i < 4)
         {
+#if DISPTR_ENABLE_DEBUG
             try
             {
                 std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
@@ -991,12 +1004,14 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
                 }
             }
             catch (...) {}
+#endif
         }
 
         stageCoeffA[(size_t) i] = aa;
     }
 
     // Debug: log gamma and some representative stages (middle and last)
+#if DISPTR_ENABLE_DEBUG
     try
     {
         std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
@@ -1028,10 +1043,11 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         }
     }
     catch (...) {}
+#endif
 
     // Update lightweight resonator and mix amount so `resonance` has
     // an audible effect even when there are few allpass stages.
-    resoMix = juce::jlimit (0.0f, 1.0f, reso);
+    resoMixTarget = juce::jlimit (0.0f, 1.0f, reso);
     const float aaReso = allpassCoeffFromFreq (freqHz, sampleRate);
     resoLeft.a = aaReso;
     resoRight.a = aaReso;
@@ -1324,22 +1340,12 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
     auto* ch0 = buffer.getWritePointer (0);
     float* ch1 = isMono ? nullptr : buffer.getWritePointer (1);
 
-    // Helper to mix the lightweight resonator into the output per-sample.
-    auto applyResoMix = [&](int n)
-    {
-        if (resoMix <= 1e-6f)
-            return;
-        const float mix = resoMix;
-        const float origL = ch0[n];
-        const float procL = resoLeft.process (origL);
-        ch0[n] = (1.0f - mix) * origL + mix * procL;
-        if (! isMono)
-        {
-            const float origR = ch1[n];
-            const float procR = resoRight.process (origR);
-            ch1[n] = (1.0f - mix) * origR + mix * procR;
-        }
-    };
+    // Interpolate reso mix smoothly across this block to avoid steps when
+    // the GUI changes `shape`/`resonance`. We compute a per-sample step
+    // and use a local running value (avoids lambda overhead).
+    float resoMixCur = resoMix;
+    const float resoMixTargetLocal = resoMixTarget;
+    const float resoMixStep = (resoMixTargetLocal - resoMixCur) / (float) juce::jmax (1, numSamples);
 
     if (amount <= 0 || activeStages <= 0)
         return;
@@ -1409,7 +1415,20 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                         processChainMono (stagePtrs[2], xL);
                         processChainMono (stagePtrs[3], xL);
                         ch0[n] = xL * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                     }
                     break;
 
@@ -1421,7 +1440,20 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                         processChainMono (stagePtrs[1], xL);
                         processChainMono (stagePtrs[2], xL);
                         ch0[n] = xL * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                     }
                     break;
 
@@ -1432,7 +1464,20 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                         processChainMono (stagePtrs[0], xL);
                         processChainMono (stagePtrs[1], xL);
                         ch0[n] = xL * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                     }
                     break;
 
@@ -1442,7 +1487,20 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                         float xL = ch0[n];
                         processChainMono (stagePtrs[0], xL);
                         ch0[n] = xL * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                     }
                     break;
             }
@@ -1463,7 +1521,23 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     processChainStereo (stagePtrs[3], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                const float origR = ch1[n];
+                                const float procR = resoRight.process (origR);
+                                ch1[n] = (1.0f - mix) * origR + mix * procR;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                 }
                 break;
 
@@ -1477,7 +1551,23 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     processChainStereo (stagePtrs[2], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                const float origR = ch1[n];
+                                const float procR = resoRight.process (origR);
+                                ch1[n] = (1.0f - mix) * origR + mix * procR;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                 }
                 break;
 
@@ -1490,7 +1580,23 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     processChainStereo (stagePtrs[1], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                const float origR = ch1[n];
+                                const float procR = resoRight.process (origR);
+                                ch1[n] = (1.0f - mix) * origR + mix * procR;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                 }
                 break;
 
@@ -1502,7 +1608,23 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     processChainStereo (stagePtrs[0], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
-                        applyResoMix(n);
+                        {
+                            if (resoMixCur <= 1e-6f)
+                            {
+                                resoMixCur += resoMixStep;
+                            }
+                            else
+                            {
+                                const float mix = resoMixCur;
+                                const float origL = ch0[n];
+                                const float procL = resoLeft.process (origL);
+                                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                                const float origR = ch1[n];
+                                const float procR = resoRight.process (origR);
+                                ch1[n] = (1.0f - mix) * origR + mix * procR;
+                                resoMixCur += resoMixStep;
+                            }
+                        }
                 }
                 break;
         }
@@ -1522,9 +1644,27 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         olaPopStereo (outL, outR);
 
         ch0[n] = outL * outputGain;
-        ch0[n] = outL * outputGain;
         if (! isMono) ch1[n] = outR * outputGain;
-        applyResoMix(n);
+        {
+            if (resoMixCur <= 1e-6f)
+            {
+                resoMixCur += resoMixStep;
+            }
+            else
+            {
+                const float mix = resoMixCur;
+                const float origL = ch0[n];
+                const float procL = resoLeft.process (origL);
+                ch0[n] = (1.0f - mix) * origL + mix * procL;
+                if (! isMono)
+                {
+                    const float origR = ch1[n];
+                    const float procR = resoRight.process (origR);
+                    ch1[n] = (1.0f - mix) * origR + mix * procR;
+                }
+                resoMixCur += resoMixStep;
+            }
+        }
 
         if (++hopCounter >= hopH)
         {

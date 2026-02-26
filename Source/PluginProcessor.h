@@ -163,6 +163,8 @@ private:
         // first-order allpass and mixed into the output per-sample.
         Allpass1 resoLeft, resoRight;
         float resoMix = 0.0f;
+        // Target for smooth interpolation of resoMix across the audio block.
+        float resoMixTarget = 0.0f;
 
         float cachedFreq = -1.0f;
         float cachedReso = -1.0f;
