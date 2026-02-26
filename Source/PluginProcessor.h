@@ -160,6 +160,12 @@ private:
         std::atomic<uint64_t> profileReverseUs { 0 };
         std::atomic<uint64_t> profileOtherUs { 0 };
         std::atomic<uint64_t> profileBlocks { 0 };
+        // More granular counters to isolate hotspots in reverse processing
+        std::atomic<uint64_t> profileGrabUs { 0 };
+        std::atomic<uint64_t> profileFrameUs { 0 };
+        std::atomic<uint64_t> profileOlaUs { 0 };
+        // When > 0, Engine will use a cheaper processing mode for this many blocks
+        int lowCpuModeRemaining = 0;
 
         std::vector<float> frameL, frameR;
         std::vector<float> winSqrt;

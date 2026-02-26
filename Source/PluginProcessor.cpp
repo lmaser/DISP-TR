@@ -13,6 +13,11 @@
 // For profiling runs we want RVS active, so set to 0.
 #define DISPTR_DISABLE_RVS 0
 
+// Low-CPU automatic mode: when avg µs/block exceeds this threshold,
+// enable a reduced-quality processing mode for the following number of blocks.
+#define DISPTR_LOW_CPU_THRESHOLD_US 1200
+#define DISPTR_LOW_CPU_DURATION_BLOCKS 480
+
 // Macros for tight per-stage processing to avoid lambda/function overhead
 #define PROCESS_CHAIN_MONO(stptr, x) do { int s = 0; for (; s + 1 < numStages; s += 2) { x = (stptr)[s].left.process (x); x = (stptr)[s + 1].left.process (x); } if (s < numStages) x = (stptr)[s].left.process (x); } while (0)
 #define PROCESS_CHAIN_STEREO(stptr, xL, xR) do { int s = 0; for (; s + 1 < numStages; s += 2) { xL = (stptr)[s].left.process (xL); xR = (stptr)[s].right.process (xR); xL = (stptr)[s + 1].left.process (xL); xR = (stptr)[s + 1].right.process (xR); } if (s < numStages) { xL = (stptr)[s].left.process (xL); xR = (stptr)[s].right.process (xR); } } while (0)
@@ -457,8 +462,18 @@ void DisperserAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
             const uint64_t bOth = engB.profileOtherUs.load (std::memory_order_relaxed);
             const uint64_t bBlk = engB.profileBlocks.load (std::memory_order_relaxed);
 
-            pdbg << "profile_summary: engA reverseUs=" << aRev << " otherUs=" << aOth << " blocks=" << aBlk
-                 << " | engB reverseUs=" << bRev << " otherUs=" << bOth << " blocks=" << bBlk << std::endl;
+              const uint64_t aGrab = engA.profileGrabUs.load (std::memory_order_relaxed);
+              const uint64_t aFrame = engA.profileFrameUs.load (std::memory_order_relaxed);
+              const uint64_t aOla = engA.profileOlaUs.load (std::memory_order_relaxed);
+
+              const uint64_t bGrab = engB.profileGrabUs.load (std::memory_order_relaxed);
+              const uint64_t bFrame = engB.profileFrameUs.load (std::memory_order_relaxed);
+              const uint64_t bOla = engB.profileOlaUs.load (std::memory_order_relaxed);
+
+              pdbg << "profile_summary: engA reverseUs=" << aRev << " otherUs=" << aOth << " blocks=" << aBlk
+                  << " | engB reverseUs=" << bRev << " otherUs=" << bOth << " blocks=" << bBlk << std::endl;
+              pdbg << "  engA grabUs=" << aGrab << " frameUs=" << aFrame << " olaUs=" << aOla
+                  << " | engB grabUs=" << bGrab << " frameUs=" << bFrame << " olaUs=" << bOla << std::endl;
             pdbg.close();
         }
     }
@@ -1158,6 +1173,24 @@ void DisperserAudioProcessor::Engine::swap (Engine& other) noexcept
         profileBlocks.store (b, std::memory_order_relaxed);
         other.profileBlocks.store (a, std::memory_order_relaxed);
     }
+    {
+        const uint64_t a = profileGrabUs.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileGrabUs.load (std::memory_order_relaxed);
+        profileGrabUs.store (b, std::memory_order_relaxed);
+        other.profileGrabUs.store (a, std::memory_order_relaxed);
+    }
+    {
+        const uint64_t a = profileFrameUs.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileFrameUs.load (std::memory_order_relaxed);
+        profileFrameUs.store (b, std::memory_order_relaxed);
+        other.profileFrameUs.store (a, std::memory_order_relaxed);
+    }
+    {
+        const uint64_t a = profileOlaUs.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileOlaUs.load (std::memory_order_relaxed);
+        profileOlaUs.store (b, std::memory_order_relaxed);
+        other.profileOlaUs.store (a, std::memory_order_relaxed);
+    }
 }
 
 void DisperserAudioProcessor::Engine::makeSqrtHann (int N)
@@ -1200,6 +1233,10 @@ void DisperserAudioProcessor::Engine::resetReverseOLA (int newN)
 
 void DisperserAudioProcessor::Engine::grabLastNToFrame()
 {
+#if DISPTR_PROFILE_RVS
+    using namespace std::chrono;
+    const auto t0 = high_resolution_clock::now();
+#endif
     const int firstLen = winN - inWritePos;
 
     for (int i = 0; i < firstLen; ++i)
@@ -1215,10 +1252,20 @@ void DisperserAudioProcessor::Engine::grabLastNToFrame()
         frameL[(size_t) i] = inRingL[(size_t) (i - firstLen)] * w;
         frameR[(size_t) i] = inRingR[(size_t) (i - firstLen)] * w;
     }
+
+#if DISPTR_PROFILE_RVS
+    const auto t1 = high_resolution_clock::now();
+    const uint64_t us = (uint64_t) duration_cast<microseconds> (t1 - t0).count();
+    profileGrabUs.fetch_add (us, std::memory_order_relaxed);
+#endif
 }
 
 void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
 {
+#if DISPTR_PROFILE_RVS
+    using namespace std::chrono;
+    const auto t0 = high_resolution_clock::now();
+#endif
     const int numStages = activeStages;
     if (numStages <= 0) return;
 
@@ -1360,10 +1407,20 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
             }
             break;
     }
+
+#if DISPTR_PROFILE_RVS
+    const auto t1 = high_resolution_clock::now();
+    const uint64_t us = (uint64_t) duration_cast<microseconds> (t1 - t0).count();
+    profileFrameUs.fetch_add (us, std::memory_order_relaxed);
+#endif
 }
 
 void DisperserAudioProcessor::Engine::olaAddFrame()
 {
+#if DISPTR_PROFILE_RVS
+    using namespace std::chrono;
+    const auto t0 = high_resolution_clock::now();
+#endif
     const int olaSize = (int) olaRingL.size();
     const float* winPtr = winSqrt.data();
     const float* frameLPtr = frameL.data();
@@ -1393,6 +1450,12 @@ void DisperserAudioProcessor::Engine::olaAddFrame()
     if (olaWritePos >= olaSize)
         olaWritePos -= olaSize;
     framesReady = 1;
+
+#if DISPTR_PROFILE_RVS
+    const auto t1 = high_resolution_clock::now();
+    const uint64_t us = (uint64_t) duration_cast<microseconds> (t1 - t0).count();
+    profileOlaUs.fetch_add (us, std::memory_order_relaxed);
+#endif
 }
 
 void DisperserAudioProcessor::Engine::olaPopStereo (float& outL, float& outR) noexcept
