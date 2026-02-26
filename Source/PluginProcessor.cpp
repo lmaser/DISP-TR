@@ -1,9 +1,17 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <fstream>
+#include <chrono>
 
 // Set to 1 to enable debug file logging (writes to disk can cause CPU spikes).
 #define DISPTR_ENABLE_DEBUG 0
+// Enable lightweight profiling counters for reverse (RVS) path.
+// We enable profiling by default for instrumented runs.
+#define DISPTR_PROFILE_RVS 1
+// If set to 1, compile-time option to disable reverse processing entirely
+// (useful to compare perf with RVS off without changing the UI).
+// For profiling runs we want RVS active, so set to 0.
+#define DISPTR_DISABLE_RVS 0
 
 // Macros for tight per-stage processing to avoid lambda/function overhead
 #define PROCESS_CHAIN_MONO(stptr, x) do { int s = 0; for (; s + 1 < numStages; s += 2) { x = (stptr)[s].left.process (x); x = (stptr)[s + 1].left.process (x); } if (s < numStages) x = (stptr)[s].left.process (x); } while (0)
@@ -379,7 +387,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     if (transitionPos >= safeTransitionSamples)
     {
-        std::swap (engA, engB);
+        engA.swap (engB);
 
         inTransition = false;
         transitionPos = 0;
@@ -429,6 +437,29 @@ void DisperserAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
             dbg << "getStateInformation: saving uiEditorWidth=" << uiEditorWidth.load (std::memory_order_relaxed)
                 << " uiEditorHeight=" << uiEditorHeight.load (std::memory_order_relaxed) << std::endl;
             dbg.close();
+        }
+    }
+    catch (...) {}
+
+    // Append profiling counters (written from GUI/host thread via this call,
+    // safe because we only read atomic counters). This helps capture runtime
+    // profiling without performing I/O on the audio thread.
+    try
+    {
+        std::ofstream pdbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/profile_summary.txt", std::ios::app);
+        if (pdbg)
+        {
+            const uint64_t aRev = engA.profileReverseUs.load (std::memory_order_relaxed);
+            const uint64_t aOth = engA.profileOtherUs.load (std::memory_order_relaxed);
+            const uint64_t aBlk = engA.profileBlocks.load (std::memory_order_relaxed);
+
+            const uint64_t bRev = engB.profileReverseUs.load (std::memory_order_relaxed);
+            const uint64_t bOth = engB.profileOtherUs.load (std::memory_order_relaxed);
+            const uint64_t bBlk = engB.profileBlocks.load (std::memory_order_relaxed);
+
+            pdbg << "profile_summary: engA reverseUs=" << aRev << " otherUs=" << aOth << " blocks=" << aBlk
+                 << " | engB reverseUs=" << bRev << " otherUs=" << bOth << " blocks=" << bBlk << std::endl;
+            pdbg.close();
         }
     }
     catch (...) {}
@@ -1059,6 +1090,76 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
     applyCoefficientsToNetworks();
 }
 
+void DisperserAudioProcessor::Engine::swap (Engine& other) noexcept
+{
+    using std::swap;
+
+    swap (sampleRate, other.sampleRate);
+    swap (maxWindowSamples, other.maxWindowSamples);
+
+    swap (amount, other.amount);
+    swap (activeStages, other.activeStages);
+    swap (series, other.series);
+    swap (reverse, other.reverse);
+
+    swap (stageCoeffA, other.stageCoeffA);
+    swap (nets, other.nets);
+
+    swap (winN, other.winN);
+    swap (hopH, other.hopH);
+    swap (inWritePos, other.inWritePos);
+    swap (hopCounter, other.hopCounter);
+
+    swap (inRingL, other.inRingL);
+    swap (inRingR, other.inRingR);
+    swap (olaRingL, other.olaRingL);
+    swap (olaRingR, other.olaRingR);
+
+    swap (olaReadPos, other.olaReadPos);
+    swap (olaWritePos, other.olaWritePos);
+    swap (framesReady, other.framesReady);
+
+    swap (frameL, other.frameL);
+    swap (frameR, other.frameR);
+    swap (winSqrt, other.winSqrt);
+
+    // Allpass state (POD) can be swapped element-wise
+    swap (resoLeft.a, other.resoLeft.a);
+    swap (resoLeft.x1, other.resoLeft.x1);
+    swap (resoLeft.y1, other.resoLeft.y1);
+    swap (resoRight.a, other.resoRight.a);
+    swap (resoRight.x1, other.resoRight.x1);
+    swap (resoRight.y1, other.resoRight.y1);
+
+    swap (resoMix, other.resoMix);
+    swap (resoMixTarget, other.resoMixTarget);
+
+    swap (cachedFreq, other.cachedFreq);
+    swap (cachedReso, other.cachedReso);
+    swap (cachedFreqBin, other.cachedFreqBin);
+    swap (cachedResoBin, other.cachedResoBin);
+
+    // Atomics cannot be std::swap'd; swap their integer contents via load/store
+    {
+        const uint64_t a = profileReverseUs.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileReverseUs.load (std::memory_order_relaxed);
+        profileReverseUs.store (b, std::memory_order_relaxed);
+        other.profileReverseUs.store (a, std::memory_order_relaxed);
+    }
+    {
+        const uint64_t a = profileOtherUs.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileOtherUs.load (std::memory_order_relaxed);
+        profileOtherUs.store (b, std::memory_order_relaxed);
+        other.profileOtherUs.store (a, std::memory_order_relaxed);
+    }
+    {
+        const uint64_t a = profileBlocks.load (std::memory_order_relaxed);
+        const uint64_t b = other.profileBlocks.load (std::memory_order_relaxed);
+        profileBlocks.store (b, std::memory_order_relaxed);
+        other.profileBlocks.store (a, std::memory_order_relaxed);
+    }
+}
+
 void DisperserAudioProcessor::Engine::makeSqrtHann (int N)
 {
     winSqrt.assign ((size_t) N, 0.0f);
@@ -1264,21 +1365,28 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
 void DisperserAudioProcessor::Engine::olaAddFrame()
 {
     const int olaSize = (int) olaRingL.size();
+    const float* winPtr = winSqrt.data();
+    const float* frameLPtr = frameL.data();
+    const float* frameRPtr = frameR.data();
+    float* olaLPtr = olaRingL.data();
+    float* olaRPtr = olaRingR.data();
 
     const int firstLen = juce::jmin (winN, olaSize - olaWritePos);
+    // copy first contiguous region
     for (int i = 0; i < firstLen; ++i)
     {
-        const float w = winSqrt[(size_t) i];
-        olaRingL[(size_t) (olaWritePos + i)] += frameL[(size_t) i] * w;
-        olaRingR[(size_t) (olaWritePos + i)] += frameR[(size_t) i] * w;
+        const float w = winPtr[i];
+        olaLPtr[olaWritePos + i] += frameLPtr[i] * w;
+        olaRPtr[olaWritePos + i] += frameRPtr[i] * w;
     }
 
+    // wrap-around tail
     for (int i = firstLen; i < winN; ++i)
     {
-        const float w = winSqrt[(size_t) i];
+        const float w = winPtr[i];
         const int p = i - firstLen;
-        olaRingL[(size_t) p] += frameL[(size_t) i] * w;
-        olaRingR[(size_t) p] += frameR[(size_t) i] * w;
+        olaLPtr[p] += frameLPtr[i] * w;
+        olaRPtr[p] += frameRPtr[i] * w;
     }
 
     olaWritePos += hopH;
@@ -1296,11 +1404,14 @@ void DisperserAudioProcessor::Engine::olaPopStereo (float& outL, float& outR) no
         return;
     }
 
-    outL = olaRingL[(size_t) olaReadPos];
-    outR = olaRingR[(size_t) olaReadPos];
+    const int readPos = olaReadPos;
+    const float* olaLPtr = olaRingL.data();
+    const float* olaRPtr = olaRingR.data();
+    outL = olaLPtr[readPos];
+    outR = olaRPtr[readPos];
 
-    olaRingL[(size_t) olaReadPos] = 0.0f;
-    olaRingR[(size_t) olaReadPos] = 0.0f;
+    olaRingL[(size_t) readPos] = 0.0f;
+    olaRingR[(size_t) readPos] = 0.0f;
 
     ++olaReadPos;
     if (olaReadPos >= (int) olaRingL.size())
@@ -1318,12 +1429,32 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
     auto* ch0 = buffer.getWritePointer (0);
     float* ch1 = isMono ? nullptr : buffer.getWritePointer (1);
 
+#if DISPTR_PROFILE_RVS
+    using namespace std::chrono;
+    const auto blockStart = high_resolution_clock::now();
+#endif
+
     // Interpolate reso mix smoothly across this block to avoid steps when
     // the GUI changes `shape`/`resonance`. We compute a per-sample step
     // and use a local running value (avoids lambda overhead).
     float resoMixCur = resoMix;
     const float resoMixTargetLocal = resoMixTarget;
     const float resoMixStep = (resoMixTargetLocal - resoMixCur) / (float) juce::jmax (1, numSamples);
+
+    // Determine whether resonator mixing will be active this block. If not,
+    // we can skip per-sample mixing entirely. If it becomes active partway
+    // through the block, compute warmSamples to avoid doing a branch per
+    // sample: handle initial samples without mixing, then the remaining
+    // samples with a fixed mixing path (no branches inside loop).
+    const float mixThreshold = 1e-6f;
+    const bool resoActive = (std::fabs (resoMixCur) > mixThreshold) || (std::fabs (resoMixTargetLocal) > mixThreshold);
+    int warmSamples = 0;
+    if (resoActive && resoMixCur <= mixThreshold && resoMixStep > 0.0f)
+    {
+        warmSamples = (int) std::ceil ((mixThreshold - resoMixCur) / resoMixStep);
+        if (warmSamples < 0) warmSamples = 0;
+        if (warmSamples > numSamples) warmSamples = numSamples;
+    }
 
     if (amount <= 0 || activeStages <= 0)
         return;
@@ -1343,7 +1474,15 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         updateCoefficientsNow (amount, safeFreq, safeReso);
     }
 
-    if (! reverse)
+    // Optional compile-time override to disable reverse path for perf tests
+    // (forces engine to behave as if reverse==false).
+#if DISPTR_DISABLE_RVS
+    const bool reverseLocal = false;
+#else
+    const bool reverseLocal = reverse;
+#endif
+
+    if (! reverseLocal)
     {
         const int numStages = activeStages;
         const int sCount = juce::jlimit (1, kMaxSeries, series);
@@ -1359,7 +1498,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
             switch (sCount)
             {
                 case 4:
-                    for (int n = 0; n < numSamples; ++n)
+                    // initial warm samples without mixing
+                    for (int n = 0; n < warmSamples; ++n)
                     {
                         float xL = ch0[n];
                         PROCESS_CHAIN_MONO (stagePtrs[0], xL);
@@ -1367,91 +1507,157 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                         PROCESS_CHAIN_MONO (stagePtrs[2], xL);
                         PROCESS_CHAIN_MONO (stagePtrs[3], xL);
                         ch0[n] = xL * outputGain;
+                        resoMixCur += resoMixStep;
+                    }
+
+                    // remaining samples: if resonator inactive, this loop is all we need
+                    if (! resoActive)
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
                         {
-                            if (resoMixCur <= 1e-6f)
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[3], xL);
+                            ch0[n] = xL * outputGain;
+                        }
+                    }
+                    else
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
+                        {
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[3], xL);
+                            ch0[n] = xL * outputGain;
+                            const float mix = resoMixCur;
+                            if (mix > mixThreshold)
                             {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
                                 const float origL = ch0[n];
                                 const float procL = resoLeft.process (origL);
                                 ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                resoMixCur += resoMixStep;
                             }
+                            resoMixCur += resoMixStep;
                         }
                     }
                     break;
 
                 case 3:
-                    for (int n = 0; n < numSamples; ++n)
+                    for (int n = 0; n < warmSamples; ++n)
                     {
                         float xL = ch0[n];
                         PROCESS_CHAIN_MONO (stagePtrs[0], xL);
                         PROCESS_CHAIN_MONO (stagePtrs[1], xL);
                         PROCESS_CHAIN_MONO (stagePtrs[2], xL);
                         ch0[n] = xL * outputGain;
+                        resoMixCur += resoMixStep;
+                    }
+                    if (! resoActive)
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
                         {
-                            if (resoMixCur <= 1e-6f)
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                            ch0[n] = xL * outputGain;
+                        }
+                    }
+                    else
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
+                        {
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                            ch0[n] = xL * outputGain;
+                            const float mix = resoMixCur;
+                            if (mix > mixThreshold)
                             {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
                                 const float origL = ch0[n];
                                 const float procL = resoLeft.process (origL);
                                 ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                resoMixCur += resoMixStep;
                             }
+                            resoMixCur += resoMixStep;
                         }
                     }
                     break;
 
                 case 2:
-                    for (int n = 0; n < numSamples; ++n)
+                    for (int n = 0; n < warmSamples; ++n)
                     {
                         float xL = ch0[n];
                         PROCESS_CHAIN_MONO (stagePtrs[0], xL);
                         PROCESS_CHAIN_MONO (stagePtrs[1], xL);
                         ch0[n] = xL * outputGain;
+                        resoMixCur += resoMixStep;
+                    }
+                    if (! resoActive)
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
                         {
-                            if (resoMixCur <= 1e-6f)
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            ch0[n] = xL * outputGain;
+                        }
+                    }
+                    else
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
+                        {
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                            ch0[n] = xL * outputGain;
+                            const float mix = resoMixCur;
+                            if (mix > mixThreshold)
                             {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
                                 const float origL = ch0[n];
                                 const float procL = resoLeft.process (origL);
                                 ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                resoMixCur += resoMixStep;
                             }
+                            resoMixCur += resoMixStep;
                         }
                     }
                     break;
 
                 default:
-                    for (int n = 0; n < numSamples; ++n)
+                    for (int n = 0; n < warmSamples; ++n)
                     {
                         float xL = ch0[n];
                         PROCESS_CHAIN_MONO (stagePtrs[0], xL);
                         ch0[n] = xL * outputGain;
+                        resoMixCur += resoMixStep;
+                    }
+                    if (! resoActive)
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
                         {
-                            if (resoMixCur <= 1e-6f)
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            ch0[n] = xL * outputGain;
+                        }
+                    }
+                    else
+                    {
+                        for (int n = warmSamples; n < numSamples; ++n)
+                        {
+                            float xL = ch0[n];
+                            PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                            ch0[n] = xL * outputGain;
+                            const float mix = resoMixCur;
+                            if (mix > mixThreshold)
                             {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
                                 const float origL = ch0[n];
                                 const float procL = resoLeft.process (origL);
                                 ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                resoMixCur += resoMixStep;
                             }
+                            resoMixCur += resoMixStep;
                         }
                     }
                     break;
@@ -1463,7 +1669,7 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         switch (sCount)
         {
             case 4:
-                for (int n = 0; n < numSamples; ++n)
+                for (int n = 0; n < warmSamples; ++n)
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
@@ -1471,120 +1677,210 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
                     PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
                     PROCESS_CHAIN_STEREO (stagePtrs[3], xL, xR);
+                    ch0[n] = xL * outputGain;
+                    ch1[n] = xR * outputGain;
+                    resoMixCur += resoMixStep;
+                }
+                if (! resoActive)
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[3], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
+                    }
+                }
+                else
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[3], xL, xR);
+                        ch0[n] = xL * outputGain;
+                        ch1[n] = xR * outputGain;
+                        const float mix = resoMixCur;
+                        if (mix > mixThreshold)
                         {
-                            if (resoMixCur <= 1e-6f)
-                            {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
-                                const float origL = ch0[n];
-                                const float procL = resoLeft.process (origL);
-                                ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                const float origR = ch1[n];
-                                const float procR = resoRight.process (origR);
-                                ch1[n] = (1.0f - mix) * origR + mix * procR;
-                                resoMixCur += resoMixStep;
-                            }
+                            const float origL = ch0[n];
+                            const float procL = resoLeft.process (origL);
+                            ch0[n] = (1.0f - mix) * origL + mix * procL;
+                            const float origR = ch1[n];
+                            const float procR = resoRight.process (origR);
+                            ch1[n] = (1.0f - mix) * origR + mix * procR;
                         }
+                        resoMixCur += resoMixStep;
+                    }
                 }
                 break;
 
             case 3:
-                for (int n = 0; n < numSamples; ++n)
+                for (int n = 0; n < warmSamples; ++n)
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
                     PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
                     PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
                     PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                    ch0[n] = xL * outputGain;
+                    ch1[n] = xR * outputGain;
+                    resoMixCur += resoMixStep;
+                }
+                if (! resoActive)
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
+                    }
+                }
+                else
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                        ch0[n] = xL * outputGain;
+                        ch1[n] = xR * outputGain;
+                        const float mix = resoMixCur;
+                        if (mix > mixThreshold)
                         {
-                            if (resoMixCur <= 1e-6f)
-                            {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
-                                const float origL = ch0[n];
-                                const float procL = resoLeft.process (origL);
-                                ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                const float origR = ch1[n];
-                                const float procR = resoRight.process (origR);
-                                ch1[n] = (1.0f - mix) * origR + mix * procR;
-                                resoMixCur += resoMixStep;
-                            }
+                            const float origL = ch0[n];
+                            const float procL = resoLeft.process (origL);
+                            ch0[n] = (1.0f - mix) * origL + mix * procL;
+                            const float origR = ch1[n];
+                            const float procR = resoRight.process (origR);
+                            ch1[n] = (1.0f - mix) * origR + mix * procR;
                         }
+                        resoMixCur += resoMixStep;
+                    }
                 }
                 break;
 
             case 2:
-                for (int n = 0; n < numSamples; ++n)
+                for (int n = 0; n < warmSamples; ++n)
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
                     PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
                     PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                    ch0[n] = xL * outputGain;
+                    ch1[n] = xR * outputGain;
+                    resoMixCur += resoMixStep;
+                }
+                if (! resoActive)
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
+                    }
+                }
+                else
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                        ch0[n] = xL * outputGain;
+                        ch1[n] = xR * outputGain;
+                        const float mix = resoMixCur;
+                        if (mix > mixThreshold)
                         {
-                            if (resoMixCur <= 1e-6f)
-                            {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
-                                const float origL = ch0[n];
-                                const float procL = resoLeft.process (origL);
-                                ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                const float origR = ch1[n];
-                                const float procR = resoRight.process (origR);
-                                ch1[n] = (1.0f - mix) * origR + mix * procR;
-                                resoMixCur += resoMixStep;
-                            }
+                            const float origL = ch0[n];
+                            const float procL = resoLeft.process (origL);
+                            ch0[n] = (1.0f - mix) * origL + mix * procL;
+                            const float origR = ch1[n];
+                            const float procR = resoRight.process (origR);
+                            ch1[n] = (1.0f - mix) * origR + mix * procR;
                         }
+                        resoMixCur += resoMixStep;
+                    }
                 }
                 break;
 
             default:
-                for (int n = 0; n < numSamples; ++n)
+                for (int n = 0; n < warmSamples; ++n)
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
                     PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    ch0[n] = xL * outputGain;
+                    ch1[n] = xR * outputGain;
+                    resoMixCur += resoMixStep;
+                }
+                if (! resoActive)
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
+                    }
+                }
+                else
+                {
+                    for (int n = warmSamples; n < numSamples; ++n)
+                    {
+                        float xL = ch0[n];
+                        float xR = ch1[n];
+                        PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                        ch0[n] = xL * outputGain;
+                        ch1[n] = xR * outputGain;
+                        const float mix = resoMixCur;
+                        if (mix > mixThreshold)
                         {
-                            if (resoMixCur <= 1e-6f)
-                            {
-                                resoMixCur += resoMixStep;
-                            }
-                            else
-                            {
-                                const float mix = resoMixCur;
-                                const float origL = ch0[n];
-                                const float procL = resoLeft.process (origL);
-                                ch0[n] = (1.0f - mix) * origL + mix * procL;
-                                const float origR = ch1[n];
-                                const float procR = resoRight.process (origR);
-                                ch1[n] = (1.0f - mix) * origR + mix * procR;
-                                resoMixCur += resoMixStep;
-                            }
+                            const float origL = ch0[n];
+                            const float procL = resoLeft.process (origL);
+                            ch0[n] = (1.0f - mix) * origL + mix * procL;
+                            const float origR = ch1[n];
+                            const float procR = resoRight.process (origR);
+                            ch1[n] = (1.0f - mix) * origR + mix * procR;
                         }
+                        resoMixCur += resoMixStep;
+                    }
                 }
                 break;
         }
 
+        // Profiling: record time spent in 'other' path when enabled.
+    #if DISPTR_PROFILE_RVS
+        using namespace std::chrono;
+        const auto blockEnd = high_resolution_clock::now();
+        const uint64_t us = (uint64_t) duration_cast<microseconds> (blockEnd - blockStart).count();
+        profileOtherUs.fetch_add (us, std::memory_order_relaxed);
+        profileBlocks.fetch_add (1, std::memory_order_relaxed);
+    #endif
         return;
     }
 
-    for (int n = 0; n < numSamples; ++n)
+    // Reverse path: split into warmSamples (no resonator processing) and
+    // the rest (with resonator mixing) to avoid per-sample branch.
+    for (int n = 0; n < warmSamples; ++n)
     {
         inRingL[(size_t) inWritePos] = ch0[n];
         inRingR[(size_t) inWritePos] = isMono ? ch0[n] : ch1[n];
@@ -1597,26 +1893,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
 
         ch0[n] = outL * outputGain;
         if (! isMono) ch1[n] = outR * outputGain;
-        {
-            if (resoMixCur <= 1e-6f)
-            {
-                resoMixCur += resoMixStep;
-            }
-            else
-            {
-                const float mix = resoMixCur;
-                const float origL = ch0[n];
-                const float procL = resoLeft.process (origL);
-                ch0[n] = (1.0f - mix) * origL + mix * procL;
-                if (! isMono)
-                {
-                    const float origR = ch1[n];
-                    const float procR = resoRight.process (origR);
-                    ch1[n] = (1.0f - mix) * origR + mix * procR;
-                }
-                resoMixCur += resoMixStep;
-            }
-        }
+
+        resoMixCur += resoMixStep;
 
         if (++hopCounter >= hopH)
         {
@@ -1627,6 +1905,54 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
             olaAddFrame();
         }
     }
+
+    for (int n = warmSamples; n < numSamples; ++n)
+    {
+        inRingL[(size_t) inWritePos] = ch0[n];
+        inRingR[(size_t) inWritePos] = isMono ? ch0[n] : ch1[n];
+        ++inWritePos;
+        if (inWritePos >= winN)
+            inWritePos = 0;
+
+        float outL = 0.0f, outR = 0.0f;
+        olaPopStereo (outL, outR);
+
+        ch0[n] = outL * outputGain;
+        if (! isMono) ch1[n] = outR * outputGain;
+
+        const float mix = resoMixCur;
+        if (mix > mixThreshold)
+        {
+            const float origL = ch0[n];
+            const float procL = resoLeft.process (origL);
+            ch0[n] = (1.0f - mix) * origL + mix * procL;
+            if (! isMono)
+            {
+                const float origR = ch1[n];
+                const float procR = resoRight.process (origR);
+                ch1[n] = (1.0f - mix) * origR + mix * procR;
+            }
+        }
+        resoMixCur += resoMixStep;
+
+        if (++hopCounter >= hopH)
+        {
+            hopCounter = 0;
+
+            grabLastNToFrame();
+            processFrameReverseIR (! isMono);
+            olaAddFrame();
+        }
+    }
+
+    #if DISPTR_PROFILE_RVS
+        // Profiling: record time spent in reverse path
+        using namespace std::chrono;
+        const auto blockEnd = high_resolution_clock::now();
+        const uint64_t us = (uint64_t) duration_cast<microseconds> (blockEnd - blockStart).count();
+        profileReverseUs.fetch_add (us, std::memory_order_relaxed);
+        profileBlocks.fetch_add (1, std::memory_order_relaxed);
+    #endif
 }
 
 // Undefine the processing macros to avoid leaking into other translation units

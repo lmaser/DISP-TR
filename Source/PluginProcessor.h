@@ -155,6 +155,12 @@ private:
         int olaWritePos = 0;
         int framesReady = 0;
 
+        // Profiling counters (microseconds). Updated from audio thread
+        // only when DISPTR_PROFILE_RVS is enabled in the .cpp file.
+        std::atomic<uint64_t> profileReverseUs { 0 };
+        std::atomic<uint64_t> profileOtherUs { 0 };
+        std::atomic<uint64_t> profileBlocks { 0 };
+
         std::vector<float> frameL, frameR;
         std::vector<float> winSqrt;
 
@@ -188,6 +194,11 @@ private:
         int windowSamplesFromAmount (int amount) const noexcept;
 
         void updateCoefficientsNow (int amount, float freqHz, float reso);
+
+        // Swap contents with another Engine instance. We provide a custom
+        // swap because the implicitly-deleted move/copy operations (due to
+        // atomic members) make std::swap<Engine> inapplicable.
+        void swap (Engine& other) noexcept;
 
         void makeSqrtHann (int N);
         void resetReverseOLA (int newN);
