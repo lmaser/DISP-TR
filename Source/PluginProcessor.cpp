@@ -740,11 +740,11 @@ void DisperserAudioProcessor::Engine::ensureAllStages (int numStages)
 
     activeStages = juce::jlimit (0, kMaxStages, numStages);
 
-    if ((int) stageCoeffA.size() != kMaxStages)
-        stageCoeffA.assign ((size_t) kMaxStages, 0.0f);
+    if ((int) stageCoeffA.size() != activeStages)
+        stageCoeffA.assign ((size_t) activeStages, 0.0f);
 
     for (auto& net : nets)
-        net.ensureStages (kMaxStages);
+        net.ensureStages (activeStages);
 }
 
 void DisperserAudioProcessor::Engine::resetAllNetworks()
