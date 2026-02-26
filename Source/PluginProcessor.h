@@ -158,6 +158,12 @@ private:
         std::vector<float> frameL, frameR;
         std::vector<float> winSqrt;
 
+        // Lightweight resonator used to make `resonance` audible even
+        // when the number of stages is small. Implemented as a
+        // first-order allpass and mixed into the output per-sample.
+        Allpass1 resoLeft, resoRight;
+        float resoMix = 0.0f;
+
         float cachedFreq = -1.0f;
         float cachedReso = -1.0f;
         int cachedFreqBin = std::numeric_limits<int>::min();
