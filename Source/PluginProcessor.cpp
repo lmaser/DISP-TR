@@ -5,6 +5,10 @@
 // Set to 1 to enable debug file logging (writes to disk can cause CPU spikes).
 #define DISPTR_ENABLE_DEBUG 0
 
+// Macros for tight per-stage processing to avoid lambda/function overhead
+#define PROCESS_CHAIN_MONO(stptr, x) do { int s = 0; for (; s + 1 < numStages; s += 2) { x = (stptr)[s].left.process (x); x = (stptr)[s + 1].left.process (x); } if (s < numStages) x = (stptr)[s].left.process (x); } while (0)
+#define PROCESS_CHAIN_STEREO(stptr, xL, xR) do { int s = 0; for (; s + 1 < numStages; s += 2) { xL = (stptr)[s].left.process (xL); xR = (stptr)[s].right.process (xR); xL = (stptr)[s + 1].left.process (xL); xR = (stptr)[s + 1].right.process (xR); } if (s < numStages) { xL = (stptr)[s].left.process (xL); xR = (stptr)[s].right.process (xR); } } while (0)
+
 namespace
 {
     constexpr bool kUseActiveStageCoeffPropagation = false;
@@ -1122,34 +1126,8 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
     for (int inst = 0; inst < sCount; ++inst)
         stagePtrs[(size_t) inst] = nets[(size_t) inst].stages.data();
 
-    auto processChainMono = [&] (StageState* st, float& x)
-    {
-        int s = 0;
-        for (; s + 1 < numStages; s += 2)
-        {
-            x = st[s].left.process (x);
-            x = st[s + 1].left.process (x);
-        }
-        if (s < numStages)
-            x = st[s].left.process (x);
-    };
-
-    auto processChainStereo = [&] (StageState* st, float& xL, float& xR)
-    {
-        int s = 0;
-        for (; s + 1 < numStages; s += 2)
-        {
-            xL = st[s].left.process (xL);
-            xR = st[s].right.process (xR);
-            xL = st[s + 1].left.process (xL);
-            xR = st[s + 1].right.process (xR);
-        }
-        if (s < numStages)
-        {
-            xL = st[s].left.process (xL);
-            xR = st[s].right.process (xR);
-        }
-    };
+        // Using macro-based chain processing to keep inner loops tight;
+        // macros are defined at file scope near the top of this file.
 
     if (processStereo)
     {
@@ -1162,10 +1140,10 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                     float xL = frameL[(size_t) ri];
                     float xR = frameR[(size_t) ri];
 
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
-                    processChainStereo (stagePtrs[2], xL, xR);
-                    processChainStereo (stagePtrs[3], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[3], xL, xR);
 
                     frameL[(size_t) ri] = xL;
                     frameR[(size_t) ri] = xR;
@@ -1179,9 +1157,9 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                     float xL = frameL[(size_t) ri];
                     float xR = frameR[(size_t) ri];
 
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
-                    processChainStereo (stagePtrs[2], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
 
                     frameL[(size_t) ri] = xL;
                     frameR[(size_t) ri] = xR;
@@ -1195,8 +1173,8 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                     float xL = frameL[(size_t) ri];
                     float xR = frameR[(size_t) ri];
 
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
 
                     frameL[(size_t) ri] = xL;
                     frameR[(size_t) ri] = xR;
@@ -1210,7 +1188,7 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                     float xL = frameL[(size_t) ri];
                     float xR = frameR[(size_t) ri];
 
-                    processChainStereo (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
 
                     frameL[(size_t) ri] = xL;
                     frameR[(size_t) ri] = xR;
@@ -1229,10 +1207,10 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                 const int ri = winN - 1 - n;
                 float xL = frameL[(size_t) ri];
 
-                processChainMono (stagePtrs[0], xL);
-                processChainMono (stagePtrs[1], xL);
-                processChainMono (stagePtrs[2], xL);
-                processChainMono (stagePtrs[3], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[3], xL);
 
                 frameL[(size_t) ri] = xL;
                 frameR[(size_t) ri] = xL;
@@ -1245,9 +1223,9 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                 const int ri = winN - 1 - n;
                 float xL = frameL[(size_t) ri];
 
-                processChainMono (stagePtrs[0], xL);
-                processChainMono (stagePtrs[1], xL);
-                processChainMono (stagePtrs[2], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[2], xL);
 
                 frameL[(size_t) ri] = xL;
                 frameR[(size_t) ri] = xL;
@@ -1260,8 +1238,8 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                 const int ri = winN - 1 - n;
                 float xL = frameL[(size_t) ri];
 
-                processChainMono (stagePtrs[0], xL);
-                processChainMono (stagePtrs[1], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[1], xL);
 
                 frameL[(size_t) ri] = xL;
                 frameR[(size_t) ri] = xL;
@@ -1274,7 +1252,7 @@ void DisperserAudioProcessor::Engine::processFrameReverseIR (bool processStereo)
                 const int ri = winN - 1 - n;
                 float xL = frameL[(size_t) ri];
 
-                processChainMono (stagePtrs[0], xL);
+                PROCESS_CHAIN_MONO (stagePtrs[0], xL);
 
                 frameL[(size_t) ri] = xL;
                 frameR[(size_t) ri] = xL;
@@ -1373,34 +1351,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         for (int inst = 0; inst < sCount; ++inst)
             stagePtrs[(size_t) inst] = nets[(size_t) inst].stages.data();
 
-        auto processChainMono = [&] (StageState* st, float& x)
-        {
-            int s = 0;
-            for (; s + 1 < numStages; s += 2)
-            {
-                x = st[s].left.process (x);
-                x = st[s + 1].left.process (x);
-            }
-            if (s < numStages)
-                x = st[s].left.process (x);
-        };
-
-        auto processChainStereo = [&] (StageState* st, float& xL, float& xR)
-        {
-            int s = 0;
-            for (; s + 1 < numStages; s += 2)
-            {
-                xL = st[s].left.process (xL);
-                xR = st[s].right.process (xR);
-                xL = st[s + 1].left.process (xL);
-                xR = st[s + 1].right.process (xR);
-            }
-            if (s < numStages)
-            {
-                xL = st[s].left.process (xL);
-                xR = st[s].right.process (xR);
-            }
-        };
+        // Using macro-based chain processing to keep inner loops tight;
+        // macros are defined earlier in the file.
 
         if (isMono)
         {
@@ -1410,10 +1362,10 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     for (int n = 0; n < numSamples; ++n)
                     {
                         float xL = ch0[n];
-                        processChainMono (stagePtrs[0], xL);
-                        processChainMono (stagePtrs[1], xL);
-                        processChainMono (stagePtrs[2], xL);
-                        processChainMono (stagePtrs[3], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[2], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[3], xL);
                         ch0[n] = xL * outputGain;
                         {
                             if (resoMixCur <= 1e-6f)
@@ -1436,9 +1388,9 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     for (int n = 0; n < numSamples; ++n)
                     {
                         float xL = ch0[n];
-                        processChainMono (stagePtrs[0], xL);
-                        processChainMono (stagePtrs[1], xL);
-                        processChainMono (stagePtrs[2], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[1], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[2], xL);
                         ch0[n] = xL * outputGain;
                         {
                             if (resoMixCur <= 1e-6f)
@@ -1461,8 +1413,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     for (int n = 0; n < numSamples; ++n)
                     {
                         float xL = ch0[n];
-                        processChainMono (stagePtrs[0], xL);
-                        processChainMono (stagePtrs[1], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[0], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[1], xL);
                         ch0[n] = xL * outputGain;
                         {
                             if (resoMixCur <= 1e-6f)
@@ -1485,7 +1437,7 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                     for (int n = 0; n < numSamples; ++n)
                     {
                         float xL = ch0[n];
-                        processChainMono (stagePtrs[0], xL);
+                        PROCESS_CHAIN_MONO (stagePtrs[0], xL);
                         ch0[n] = xL * outputGain;
                         {
                             if (resoMixCur <= 1e-6f)
@@ -1515,10 +1467,10 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
-                    processChainStereo (stagePtrs[2], xL, xR);
-                    processChainStereo (stagePtrs[3], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[3], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
                         {
@@ -1546,9 +1498,9 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
-                    processChainStereo (stagePtrs[2], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[2], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
                         {
@@ -1576,8 +1528,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
-                    processChainStereo (stagePtrs[0], xL, xR);
-                    processChainStereo (stagePtrs[1], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[1], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
                         {
@@ -1605,7 +1557,7 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
                 {
                     float xL = ch0[n];
                     float xR = ch1[n];
-                    processChainStereo (stagePtrs[0], xL, xR);
+                    PROCESS_CHAIN_STEREO (stagePtrs[0], xL, xR);
                         ch0[n] = xL * outputGain;
                         ch1[n] = xR * outputGain;
                         {
@@ -1676,3 +1628,7 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         }
     }
 }
+
+// Undefine the processing macros to avoid leaking into other translation units
+#undef PROCESS_CHAIN_MONO
+#undef PROCESS_CHAIN_STEREO
