@@ -814,17 +814,73 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
     if (numStages <= 0 || sampleRate <= 0.0)
         return;
 
+    // Debug: log frequency/coefficient calculation to help diagnose mapping issues
+    try
+    {
+        std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
+        if (dbg)
+        {
+            dbg << "updateCoefficientsNow: amount=" << a
+                << " activeStages=" << numStages
+                << " sampleRate=" << sampleRate
+                << " freqHz=" << freqHz
+                << " reso=" << reso << std::endl;
+            dbg.close();
+        }
+    }
+    catch (...) {}
+
     const float n = amountNorm (a);
     const float spreadOct = 0.10f + 2.90f * std::pow (n, 0.50f);
     const float gamma = juce::jmap (juce::jlimit (0.0f, 1.0f, reso), 1.0f, 4.0f);
-    const float aScale = 0.90f;
+    // Temporarily set aScale to 1.0 to avoid bias introduced by scaling
+    // the allpass tan-domain. If this fixes centering, we can tune
+    // aScale more carefully (or make it frequency-dependent).
+    const float aScale = 1.0f;
 
     float fMin = freqHz * std::pow (2.0f, -spreadOct);
     float fMax = freqHz * std::pow (2.0f,  spreadOct);
 
-    fMin = juce::jlimit (20.0f, 20000.0f, fMin);
-    fMax = juce::jlimit (20.0f, 20000.0f, fMax);
-    if (fMax <= fMin + 1.0f) fMax = fMin + 1.0f;
+    const float kLowHz = 20.0f;
+    const float kHighHz = 20000.0f;
+
+    // Try to preserve the geometric mean (freqHz) when clamping bounds.
+    // If fMin is below kLowHz, clamp fMin to kLowHz and set fMax = freq^2 / fMin
+    // (so sqrt(fMin*fMax) == freq). If that pushes fMax above kHighHz, fall
+    // back to clamping both to the legal range.
+    float fMinRaw = fMin;
+    float fMaxRaw = fMax;
+
+    if (fMinRaw < kLowHz)
+    {
+        fMinRaw = kLowHz;
+        fMaxRaw = (freqHz * freqHz) / fMinRaw;
+    }
+
+    if (fMaxRaw > kHighHz)
+    {
+        fMaxRaw = kHighHz;
+        fMinRaw = (freqHz * freqHz) / fMaxRaw;
+    }
+
+    // Ensure final bounds are inside absolute limits
+    fMin = juce::jlimit (kLowHz, kHighHz, fMinRaw);
+    fMax = juce::jlimit (kLowHz, kHighHz, fMaxRaw);
+    if (fMax <= fMin * 1.0001f)
+        fMax = fMin * 1.0001f;
+
+    // Debug: log final fMin/fMax to help diagnose low-frequency centering
+    try
+    {
+        std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
+        if (dbg)
+        {
+            dbg << "  fMinRaw=" << fMinRaw << " fMaxRaw=" << fMaxRaw
+                << " fMin=" << fMin << " fMax=" << fMax << std::endl;
+            dbg.close();
+        }
+    }
+    catch (...) {}
 
     const float ratio = fMax / fMin;
     const int denom = juce::jmax (1, numStages - 1);
@@ -838,8 +894,57 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
         stageFreq = juce::jlimit (20.0f, 20000.0f, stageFreq);
 
         float aa = allpassCoeffFromFreq (stageFreq, sampleRate);
-        aa *= aScale;
-        aa = juce::jlimit (-0.99f, 0.99f, aa);
+
+        // Debug: record first few stage frequencies and coefficients (before and after scaling)
+        if (i < 4)
+        {
+            try
+            {
+                std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
+                if (dbg)
+                {
+                    dbg << "  stage " << i << " stageFreq=" << stageFreq;
+                    dbg << " coeffA(before)=" << aa;
+                    const double t_recon = (1.0 - (double) aa) / (1.0 + (double) aa);
+                    const double w_recon = std::atan (t_recon);
+                    const double freq_recon = w_recon * sampleRate / juce::MathConstants<double>::pi;
+                    dbg << " freqRecon(before)=" << freq_recon;
+                    dbg.close();
+                }
+            }
+            catch (...) {}
+        }
+
+        // Apply aScale in the tan(omega/2) domain to avoid shifting the
+        // effective centre frequency massively when 'a' is near 1.0.
+        // Inverse mapping: t = (1 - a) / (1 + a); then scale t, then recompute a.
+        float t = (1.0f - aa) / (1.0f + aa);
+        const float tScaled = t * aScale;
+        aa = (1.0f - tScaled) / (1.0f + tScaled);
+        // Allow coefficients very close to +/-1.0 (but not exactly 1) to
+        // preserve very low frequency targets. Using 0.9999 avoids numeric
+        // instability while preventing the large frequency shift caused by
+        // clamping to 0.99.
+        aa = juce::jlimit (-0.9999f, 0.9999f, aa);
+
+        // Log scaled coefficient and reconstructed frequency
+        if (i < 4)
+        {
+            try
+            {
+                std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
+                if (dbg)
+                {
+                    dbg << " coeffA(after)=" << aa;
+                    const double t_recon2 = (1.0 - (double) aa) / (1.0 + (double) aa);
+                    const double w_recon2 = std::atan (t_recon2);
+                    const double freq_recon2 = w_recon2 * sampleRate / juce::MathConstants<double>::pi;
+                    dbg << " freqRecon(after)=" << freq_recon2 << "\n";
+                    dbg.close();
+                }
+            }
+            catch (...) {}
+        }
 
         stageCoeffA[(size_t) i] = aa;
     }
