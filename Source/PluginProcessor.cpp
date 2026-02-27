@@ -4,7 +4,7 @@
 #include <chrono>
 
 // Set to 1 to enable debug file logging (writes to disk can cause CPU spikes).
-#define DISPTR_ENABLE_DEBUG 0
+#define DISPTR_ENABLE_DEBUG 1
 // Enable lightweight profiling counters for reverse (RVS) path.
 // We enable profiling by default for instrumented runs.
 #define DISPTR_PROFILE_RVS 1
@@ -90,6 +90,8 @@ DisperserAudioProcessor::DisperserAudioProcessor()
     resonanceParam = apvts.getRawParameterValue (kParamResonance);
     reverseParam = apvts.getRawParameterValue (kParamReverse);
     invParam = apvts.getRawParameterValue (kParamInv);
+    s0Param = apvts.getRawParameterValue (kParamS0);
+    s100Param = apvts.getRawParameterValue (kParamS100);
     uiWidthParam = apvts.getRawParameterValue (kParamUiWidth);
     uiHeightParam = apvts.getRawParameterValue (kParamUiHeight);
     uiPaletteParam = apvts.getRawParameterValue (kParamUiPalette);
@@ -182,7 +184,7 @@ bool DisperserAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 #endif
 
 void DisperserAudioProcessor::startTransitionIfNeeded (int newAmount, int newSeries, bool newReverse,
-                                                      float freqNow, float resoNow)
+                                                      float freqNow, float shapeNow)
 {
     newAmount = juce::jlimit (kAmountMin, kAmountMax, newAmount);
     newSeries = juce::jlimit (kSeriesMin, kSeriesMax, newSeries);
@@ -213,7 +215,7 @@ void DisperserAudioProcessor::startTransitionIfNeeded (int newAmount, int newSer
         return;
     }
 
-    engB.setTopology (newAmount, newSeries, newReverse, freqNow, resoNow);
+    engB.setTopology (newAmount, newSeries, newReverse, freqNow, shapeNow);
 
     inTransition = true;
     transitionPos = 0;
@@ -237,32 +239,38 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         buffer.clear (i, 0, buffer.getNumSamples());
 
     const float freqParamNow = loadAtomicOrDefault (freqParam, kFreqDefault);
-    const float resoParamNow = loadAtomicOrDefault (resonanceParam, kResonanceDefault);
+    const float shapeParamNow = loadAtomicOrDefault (resonanceParam, kResonanceDefault);  //Param is called resonance but represents shape
     const float amountParamNow = loadAtomicOrDefault (amountParam, (float) kAmountDefault);
     const int series = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
     const bool reverse = loadBoolParamOrDefault (reverseParam, false);
     const bool invPol = loadBoolParamOrDefault (invParam, false);
+    const bool debugS0 = loadBoolParamOrDefault (s0Param, false);
+    const bool debugS100 = loadBoolParamOrDefault (s100Param, false);
 
     freqSmoothed.setTargetValue (freqParamNow);
-    resonanceSmoothed.setTargetValue (resoParamNow);
+    resonanceSmoothed.setTargetValue (shapeParamNow);
     amountSmoothed.setTargetValue (amountParamNow);
 
     const float freqStart = freqSmoothed.getCurrentValue();
-    const float resoStart = resonanceSmoothed.getCurrentValue();
+    const float shapeStart = resonanceSmoothed.getCurrentValue();
 
     freqSmoothed.skip (numSamples);
     resonanceSmoothed.skip (numSamples);
 
     const float freqEnd = freqSmoothed.getCurrentValue();
-    const float resoEnd = resonanceSmoothed.getCurrentValue();
+    const float shapeEnd = resonanceSmoothed.getCurrentValue();
 
     const float amountStart = amountSmoothed.getCurrentValue();
     amountSmoothed.skip (numSamples);
     const float amountEnd = amountSmoothed.getCurrentValue();
 
     const float freqNow = 0.5f * (freqStart + freqEnd);
-    const float resoNow = 0.5f * (resoStart + resoEnd);
+    float shapeNow = 0.5f * (shapeStart + shapeEnd);
     const float amountNowContinuous = 0.5f * (amountStart + amountEnd);
+    
+    // Debug override: S0 = force shape to 0 (Button1), S100 = force shape to 1 (Button2)
+    if (debugS0) shapeNow = 0.0f;
+    if (debugS100) shapeNow = 1.0f;
     const int amountNowRounded = juce::jlimit (kAmountMin, kAmountMax, (int) std::lround (amountNowContinuous));
 
     int amountNow = amountNowRounded;
@@ -278,7 +286,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     const float outputGain = invPol ? -1.0f : 1.0f;
 
-    startTransitionIfNeeded (amountNow, series, reverse, freqNow, resoNow);
+    startTransitionIfNeeded (amountNow, series, reverse, freqNow, shapeNow);
 
     // Debug file logging is disabled by default because of I/O cost.
 #if DISPTR_ENABLE_DEBUG
@@ -288,16 +296,16 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (dbg)
         {
             dbg << "processBlock: freqParamNow=" << freqParamNow
-                << " resoParamNow=" << resoParamNow
+                << " shapeParamNow=" << shapeParamNow
                 << " amountParamNow=" << amountParamNow
                 << " freqNow=" << freqNow
-                << " resoNow=" << resoNow;
-            // also log state property for resonance
-            const auto stateReso = apvts.state.getProperty (kParamResonance);
-            if (! stateReso.isVoid())
-                dbg << " stateReso=" << (double) (float) stateReso;
+                << " shapeNow=" << shapeNow;
+            // also log state property for shape/resonance
+            const auto stateShape = apvts.state.getProperty (kParamResonance);
+            if (! stateShape.isVoid())
+                dbg << " stateShape=" << (double) (float) stateShape;
             else
-                dbg << " stateReso=void";
+                dbg << " stateShape=void";
             dbg << std::endl;
             dbg.close();
         }
@@ -311,7 +319,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         engA.series  = juce::jlimit (kSeriesMin, kSeriesMax, series);
         engA.reverse = reverse;
 
-        engA.processBlock (buffer, freqNow, resoNow, outputGain);
+        engA.processBlock (buffer, freqNow, shapeNow, outputGain);
 
         return;
     }
@@ -321,8 +329,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         transitionBufferB.setSize (channels, numSamples, false, false, true);
     transitionBufferB.makeCopyOf (buffer, true);
 
-    engA.processBlock (buffer, freqNow, resoNow, outputGain);
-    engB.processBlock (transitionBufferB, freqNow, resoNow, outputGain);
+    engA.processBlock (buffer, freqNow, shapeNow, outputGain);
+    engB.processBlock (transitionBufferB, freqNow, shapeNow, outputGain);
 
     auto* const* outPtrs = buffer.getArrayOfWritePointers();
     const float* const* bPtrs = transitionBufferB.getArrayOfReadPointers();
@@ -400,7 +408,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (hasPendingTopology)
         {
             hasPendingTopology = false;
-            engB.setTopology (pendingAmount, pendingSeries, pendingReverse, freqNow, resoNow);
+            engB.setTopology (pendingAmount, pendingSeries, pendingReverse, freqNow, shapeNow);
             inTransition = true;
             transitionPos = 0;
         }
@@ -725,6 +733,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
     params.push_back (std::make_unique<juce::AudioParameterBool>(
         kParamInv, "Inv", false));
 
+    params.push_back (std::make_unique<juce::AudioParameterBool>(
+        kParamS0, "S0", false));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool>(
+        kParamS100, "S100", false));
+
     // UI width/height are persisted via ValueTree properties but should not
     // be exposed as automatable parameters to the host (hosts can map/learn them).
     // We intentionally do NOT create parameters for kParamUiWidth / kParamUiHeight here.
@@ -782,20 +796,29 @@ void DisperserAudioProcessor::Engine::init (double sr)
 
     resetReverseOLA (1);
 
+    cascadeLeft.init ((int) sr, 64);
+    cascadeRight.init ((int) sr, 64);
+
     cachedFreq = -1.0f;
-    cachedReso = -1.0f;
+    cachedShape = -1.0f;
     cachedFreqBin = std::numeric_limits<int>::min();
-    cachedResoBin = std::numeric_limits<int>::min();
+    cachedShapeBin = std::numeric_limits<int>::min();
 
     // Reset resonator state
     resoLeft.reset();
     resoRight.reset();
     resoMix = 0.0f;
     resoMixTarget = 0.0f;
+
+    // Reset cascade state
+    cascadeLeft.reset();
+    cascadeRight.reset();
+    cascadeMix = 0.0f;
+    cascadeMixTarget = 0.0f;
 }
 
 void DisperserAudioProcessor::Engine::setTopology (int newAmount, int newSeries, bool newReverse,
-                                                  float initFreq, float initReso)
+                                                  float initFreq, float initShape)
 {
     amount = juce::jlimit (DisperserAudioProcessor::kAmountMin,
                            DisperserAudioProcessor::kAmountMax,
@@ -806,16 +829,16 @@ void DisperserAudioProcessor::Engine::setTopology (int newAmount, int newSeries,
     reverse = newReverse;
 
     ensureAllStages (amount);
-    updateCoefficientsNow (amount, initFreq, initReso);
+    updateCoefficientsNow (amount, initFreq, initShape);
     resetAllNetworks();
 
     if (reverse)
         resetReverseOLA (windowSamplesFromAmount (amount));
 
     cachedFreq = initFreq;
-    cachedReso = initReso;
+    cachedShape = initShape;
     cachedFreqBin = std::numeric_limits<int>::min();
-    cachedResoBin = std::numeric_limits<int>::min();
+    cachedShapeBin = std::numeric_limits<int>::min();
 }
 
 void DisperserAudioProcessor::Engine::ensureAllStages (int numStages)
@@ -892,7 +915,7 @@ int DisperserAudioProcessor::Engine::windowSamplesFromAmount (int a) const noexc
     return juce::jlimit (1, maxWindowSamples, ws);
 }
 
-void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz, float reso)
+void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz, float shape)
 {
     const int numStages = activeStages;
     if (numStages <= 0 || sampleRate <= 0.0)
@@ -909,7 +932,7 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
                 << " activeStages=" << numStages
                 << " sampleRate=" << sampleRate
                 << " freqHz=" << freqHz
-                << " reso=" << reso << std::endl;
+                << " shape=" << shape << std::endl;
             dbg.close();
         }
     }
@@ -917,8 +940,20 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
 #endif
 
     const float n = amountNorm (a);
-    const float spreadOct = 0.10f + 2.90f * std::pow (n, 0.50f);
-    const float gamma = juce::jmap (juce::jlimit (0.0f, 1.0f, reso), 1.0f, 4.0f);
+    const float baseSpreadOct = 0.10f + 2.90f * std::pow (n, 0.50f);
+    
+    // Shape: 0% = wide spread, 100% = collapsed to center (pinch)
+    const float shapeNorm = juce::jlimit (0.0f, 1.0f, shape);
+    
+    // Collapse spread when shape increases - this creates the pinch effect
+    const float spreadOct = baseSpreadOct * (1.0f - shapeNorm * 0.99f);
+    
+    // Gamma: shape controls distribution exponent for additional pinch
+    const float gamma = 1.0f + shapeNorm * 4.0f;  // 1.0 to 5.0
+    
+    // Always use first-order allpass (disable cascade)
+    cascadeMixTarget = 0.0f;
+    
     // Temporarily set aScale to 1.0 to avoid bias introduced by scaling
     // the allpass tan-domain. If this fixes centering, we can tune
     // aScale more carefully (or make it frequency-dependent).
@@ -973,11 +1008,8 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
     const float ratio = fMax / fMin;
     const int denom = juce::jmax (1, numStages - 1);
 
-    // Precompute pinch intensity once per update (used for all stages)
-    const float pinch = juce::jlimit (0.0f, 1.0f, reso);
-    const float densityScale = 1.0f + (1.0f - n) * 3.0f; // stronger boost when n small
-    float pinchIntensityGlobal = pinch * densityScale * 0.9f;
-    pinchIntensityGlobal = juce::jlimit (0.0f, 1.0f, pinchIntensityGlobal);
+    // Pinch intensity: pull frequencies toward center when shape > 0
+    const float pinchIntensityGlobal = shapeNorm * 0.95f;
 
     for (int i = 0; i < numStages; ++i)
     {
@@ -1095,12 +1127,30 @@ void DisperserAudioProcessor::Engine::updateCoefficientsNow (int a, float freqHz
     catch (...) {}
 #endif
 
-    // Update lightweight resonator and mix amount so `resonance` has
-    // an audible effect even when there are few allpass stages.
-    resoMixTarget = juce::jlimit (0.0f, 1.0f, reso);
+    // Update lightweight resonator (disabled)
+    resoMixTarget = 0.0f;
     const float aaReso = allpassCoeffFromFreq (freqHz, sampleRate);
     resoLeft.a = aaReso;
     resoRight.a = aaReso;
+
+    // Disable cascade - using optimized first-order allpass
+    cascadeLeft.set (freqHz, 0.5f, 0);
+    cascadeRight.set (freqHz, 0.5f, 0);
+
+#if DISPTR_ENABLE_DEBUG
+    try
+    {
+        std::ofstream dbg ("e:/Workspace/Production/JUCE_projects/DISP-TR/freq_debug.txt", std::ios::app);
+        if (dbg)
+        {
+            dbg << "  FIRST-ORDER PINCH: shapeNorm=" << shapeNorm 
+                << " spreadOct=" << spreadOct << " gamma=" << gamma 
+                << " pinch=" << pinchIntensityGlobal << std::endl;
+            dbg.close();
+        }
+    }
+    catch (...) {}
+#endif
 
     applyCoefficientsToNetworks();
 }
@@ -1149,10 +1199,23 @@ void DisperserAudioProcessor::Engine::swap (Engine& other) noexcept
     swap (resoMix, other.resoMix);
     swap (resoMixTarget, other.resoMixTarget);
 
+    // Cascade state
+    swap (cascadeLeft.states, other.cascadeLeft.states);
+    swap (cascadeLeft.a0, other.cascadeLeft.a0);
+    swap (cascadeLeft.a1, other.cascadeLeft.a1);
+    swap (cascadeLeft.count, other.cascadeLeft.count);
+    swap (cascadeRight.states, other.cascadeRight.states);
+    swap (cascadeRight.a0, other.cascadeRight.a0);
+    swap (cascadeRight.a1, other.cascadeRight.a1);
+    swap (cascadeRight.count, other.cascadeRight.count);
+
+    swap (cascadeMix, other.cascadeMix);
+    swap (cascadeMixTarget, other.cascadeMixTarget);
+
     swap (cachedFreq, other.cachedFreq);
-    swap (cachedReso, other.cachedReso);
+    swap (cachedShape, other.cachedShape);
     swap (cachedFreqBin, other.cachedFreqBin);
-    swap (cachedResoBin, other.cachedResoBin);
+    swap (cachedShapeBin, other.cachedShapeBin);
 
     // Atomics cannot be std::swap'd; swap their integer contents via load/store
     {
@@ -1482,7 +1545,7 @@ void DisperserAudioProcessor::Engine::olaPopStereo (float& outL, float& outR) no
 }
 
 void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& buffer,
-                                                   float freqNow, float resoNow,
+                                                   float freqNow, float shapeNow,
                                                    float outputGain)
 {
     const int numSamples = buffer.getNumSamples();
@@ -1496,6 +1559,11 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
     using namespace std::chrono;
     const auto blockStart = high_resolution_clock::now();
 #endif
+
+    // Interpolate cascade mix smoothly across this block
+    float cascadeMixCur = cascadeMix;
+    const float cascadeMixTargetLocal = cascadeMixTarget;
+    const float cascadeMixStep = (cascadeMixTargetLocal - cascadeMixCur) / (float) juce::jmax (1, numSamples);
 
     // Interpolate reso mix smoothly across this block to avoid steps when
     // the GUI changes `shape`/`resonance`. We compute a per-sample step
@@ -1523,18 +1591,18 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         return;
 
     const float safeFreq = juce::jlimit (20.0f, 20000.0f, freqNow);
-    const float safeReso = juce::jlimit (0.0f, 1.0f, resoNow);
+    const float safeShape = juce::jlimit (0.0f, 1.0f, shapeNow);
 
     const int freqBin = (int) std::lround (1200.0 * std::log2 ((double) safeFreq / 20.0));
-    const int resoBin = (int) std::lround ((double) safeReso * 1000.0);
+    const int shapeBin = (int) std::lround ((double) safeShape * 1000.0);
 
-    if (freqBin != cachedFreqBin || resoBin != cachedResoBin)
+    if (freqBin != cachedFreqBin || shapeBin != cachedShapeBin)
     {
         cachedFreq = safeFreq;
-        cachedReso = safeReso;
+        cachedShape = safeShape;
         cachedFreqBin = freqBin;
-        cachedResoBin = resoBin;
-        updateCoefficientsNow (amount, safeFreq, safeReso);
+        cachedShapeBin = shapeBin;
+        updateCoefficientsNow (amount, safeFreq, safeShape);
     }
 
     // Optional compile-time override to disable reverse path for perf tests
@@ -1553,11 +1621,46 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         for (int inst = 0; inst < sCount; ++inst)
             stagePtrs[(size_t) inst] = nets[(size_t) inst].stages.data();
 
-        // Using macro-based chain processing to keep inner loops tight;
-        // macros are defined earlier in the file.
+        // Use optimized first-order allpass with pinch
+        const bool usePureCascade = false;
+        const bool usePureFirstOrder = true;
+        const bool useMixed = false;
 
-        if (isMono)
+        if (usePureCascade)
         {
+            // Button2 mode: pure second-order cascade
+            if (isMono)
+            {
+                for (int n = 0; n < numSamples; ++n)
+                {
+                    const float in = ch0[n];
+                    const float proc = cascadeLeft.process (in);
+                    ch0[n] = proc * outputGain;
+                    cascadeMixCur += cascadeMixStep;
+                }
+            }
+            else
+            {
+                for (int n = 0; n < numSamples; ++n)
+                {
+                    const float inL = ch0[n];
+                    const float inR = ch1[n];
+                    const float outL = cascadeLeft.process (inL);
+                    const float outR = cascadeRight.process (inR);
+                    ch0[n] = outL * outputGain;
+                    ch1[n] = outR * outputGain;
+                    cascadeMixCur += cascadeMixStep;
+                }
+            }
+        }
+        else if (usePureFirstOrder)
+        {
+            // Button1 mode: pure first-order allpass (existing code)
+            // Using macro-based chain processing to keep inner loops tight;
+            // macros are defined earlier in the file.
+
+            if (isMono)
+            {
             switch (sCount)
             {
                 case 4:
@@ -1728,7 +1831,8 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
 
             return;
         }
-
+        else // stereo
+        {
         switch (sCount)
         {
             case 4:
@@ -1938,6 +2042,63 @@ void DisperserAudioProcessor::Engine::processBlock (juce::AudioBuffer<float>& bu
         profileOtherUs.fetch_add (us, std::memory_order_relaxed);
         profileBlocks.fetch_add (1, std::memory_order_relaxed);
     #endif
+        } // end stereo else
+        } // end usePureFirstOrder
+        else if (useMixed)
+        {
+            // Mixed mode: crossfade between first-order and cascade
+            // Process both algorithms and blend per-sample based on cascadeMixCur
+            if (isMono)
+            {
+                for (int n = 0; n < numSamples; ++n)
+                {
+                    // Process with first-order allpass chain
+                    float xFirst = ch0[n];
+                    for (int st = 0; st < activeStages; ++st)
+                    {
+                        xFirst = stagePtrs[0][st].left.process (xFirst);
+                    }
+
+                    // Process with cascade
+                    const float xCascade = cascadeLeft.process (ch0[n]);
+
+                    // Crossfade
+                    const float mix = cascadeMixCur;
+                    ch0[n] = ((1.0f - mix) * xFirst + mix * xCascade) * outputGain;
+                    cascadeMixCur += cascadeMixStep;
+                }
+            }
+            else
+            {
+                for (int n = 0; n < numSamples; ++n)
+                {
+                    // Process left with first-order
+                    float xFirstL = ch0[n];
+                    for (int st = 0; st < activeStages; ++st)
+                    {
+                        xFirstL = stagePtrs[0][st].left.process (xFirstL);
+                    }
+
+                    // Process right with first-order
+                    float xFirstR = ch1[n];
+                    for (int st = 0; st < activeStages; ++st)
+                    {
+                        xFirstR = stagePtrs[0][st].right.process (xFirstR);
+                    }
+
+                    // Process with cascade
+                    const float xCascadeL = cascadeLeft.process (ch0[n]);
+                    const float xCascadeR = cascadeRight.process (ch1[n]);
+
+                    // Crossfade
+                    const float mix = cascadeMixCur;
+                    ch0[n] = ((1.0f - mix) * xFirstL + mix * xCascadeL) * outputGain;
+                    ch1[n] = ((1.0f - mix) * xFirstR + mix * xCascadeR) * outputGain;
+                    cascadeMixCur += cascadeMixStep;
+                }
+            }
+        } // end useMixed
+        
         return;
     }
 

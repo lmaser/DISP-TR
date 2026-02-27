@@ -1013,9 +1013,17 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     rvsButton.setButtonText ("");
     invButton.setButtonText ("");
+    s0Button.setButtonText ("S0");
+    s100Button.setButtonText ("S100");
+    
+    // Make S0/S100 buttons visible with distinct colors
+    s0Button.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
+    s100Button.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
 
     addAndMakeVisible (rvsButton);
     addAndMakeVisible (invButton);
+    addAndMakeVisible (s0Button);
+    addAndMakeVisible (s100Button);
 
     auto bindSlider = [&] (std::unique_ptr<SliderAttachment>& attachment,
                            const char* paramId,
@@ -1040,6 +1048,8 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     bindButton (rvsAttachment, DisperserAudioProcessor::kParamReverse, rvsButton);
     bindButton (invAttachment, DisperserAudioProcessor::kParamInv, invButton);
+    bindButton (s0Attachment, DisperserAudioProcessor::kParamS0, s0Button);
+    bindButton (s100Attachment, DisperserAudioProcessor::kParamS100, s100Button);
 
     const std::array<const char*, 6> uiMirrorParamIds {
         DisperserAudioProcessor::kParamUiPalette,
@@ -3374,6 +3384,12 @@ void DisperserAudioProcessorEditor::resized()
 
     rvsButton.setBounds (rvsBlockX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
     invButton.setBounds (invBlockX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
+    
+    // Position S0 and S100 debug buttons to the right of INV button
+    const int s0BtnX = invBlockX + verticalLayout.box + 20;  // 20px gap after INV
+    const int s100BtnX = s0BtnX + verticalLayout.box + 10;   // 10px gap between S0 and S100
+    s0Button.setBounds (s0BtnX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
+    s100Button.setBounds (s100BtnX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
 
     if (resizerCorner != nullptr)
         resizerCorner->setBounds (W - kResizerCornerPx, H - kResizerCornerPx, kResizerCornerPx, kResizerCornerPx);

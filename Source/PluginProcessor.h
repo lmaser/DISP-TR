@@ -16,6 +16,8 @@ public:
     static constexpr const char* kParamResonance = "resonance";
     static constexpr const char* kParamReverse   = "reverse";
     static constexpr const char* kParamInv       = "inv";
+    static constexpr const char* kParamS0        = "s0";
+    static constexpr const char* kParamS100      = "s100";
     static constexpr const char* kParamUiWidth   = "ui_width";
     static constexpr const char* kParamUiHeight  = "ui_height";
     static constexpr const char* kParamUiPalette = "ui_palette";
@@ -100,6 +102,92 @@ private:
         void reset() noexcept { x1 = 0.0f; y1 = 0.0f; }
     };
 
+    // Second-order allpass for Button2/cascade mode (shape at 100%)
+    struct SecondOrderAllPassCascade
+    {
+        struct State { float xnz2 = 0.0f, xnz1 = 0.0f, ynz2 = 0.0f, ynz1 = 0.0f; };
+        
+        std::vector<State> states;
+        float a0 = 0.0f;
+        float a1 = 0.0f;
+        int sampleRate = 48000;
+        int count = 0;
+        int maxCount = 64;
+
+        void init (int sr, int maxStages = 64)
+        {
+            sampleRate = sr;
+            maxCount = maxStages;
+            states.assign ((size_t) maxStages, {});
+            count = 0;
+        }
+
+        void set (float frequency, float Q, int numStages) noexcept
+        {
+            const float w = 2.0f * juce::MathConstants<float>::pi * frequency / (float) sampleRate;
+            const float cosw = std::cos (w);
+            const float alpha = std::sin (w) / (2.0f * Q);
+            const float a2 = 1.0f / (1.0f + alpha);
+            a0 = (1.0f - alpha) * a2;
+            a1 = -2.0f * cosw * a2;
+
+            count = juce::jlimit (0, (int) states.size(), numStages);
+        }
+
+        inline float process (float in) noexcept
+        {
+            float yn = in;
+            int i = 0;
+            
+            // Manual loop unrolling by 2 for better performance
+            for (; i + 1 < count; i += 2)
+            {
+                // Process stage i
+                State& s0 = states[(size_t) i];
+                const float temp0 = yn;
+                yn = a0 * (yn - s0.ynz2) + a1 * (s0.xnz1 - s0.ynz1) + s0.xnz2;
+                s0.xnz2 = s0.xnz1;
+                s0.xnz1 = temp0;
+                s0.ynz2 = s0.ynz1;
+                s0.ynz1 = yn;
+                
+                // Process stage i+1
+                State& s1 = states[(size_t) (i + 1)];
+                const float temp1 = yn;
+                yn = a0 * (yn - s1.ynz2) + a1 * (s1.xnz1 - s1.ynz1) + s1.xnz2;
+                s1.xnz2 = s1.xnz1;
+                s1.xnz1 = temp1;
+                s1.ynz2 = s1.ynz1;
+                s1.ynz1 = yn;
+            }
+            
+            // Handle remaining stage if count is odd
+            if (i < count)
+            {
+                State& s = states[(size_t) i];
+                const float temp = yn;
+                yn = a0 * (yn - s.ynz2) + a1 * (s.xnz1 - s.ynz1) + s.xnz2;
+                s.xnz2 = s.xnz1;
+                s.xnz1 = temp;
+                s.ynz2 = s.ynz1;
+                s.ynz1 = yn;
+            }
+            
+            return yn;
+        }
+
+        void reset() noexcept
+        {
+            for (auto& s : states)
+            {
+                s.xnz2 = 0.0f;
+                s.xnz1 = 0.0f;
+                s.ynz2 = 0.0f;
+                s.ynz1 = 0.0f;
+            }
+        }
+    };
+
     struct StageState { Allpass1 left, right; };
 
     struct NetworkInstance
@@ -178,17 +266,22 @@ private:
         // Target for smooth interpolation of resoMix across the audio block.
         float resoMixTarget = 0.0f;
 
+        // Second-order allpass cascade for Button2 mode (shape=100%)
+        SecondOrderAllPassCascade cascadeLeft, cascadeRight;
+        float cascadeMix = 0.0f;  // 0.0 = first-order only, 1.0 = second-order cascade
+        float cascadeMixTarget = 0.0f;
+
         float cachedFreq = -1.0f;
-        float cachedReso = -1.0f;
+        float cachedShape = -1.0f;  // Renamed from cachedReso to clarify it's shape
         int cachedFreqBin = std::numeric_limits<int>::min();
-        int cachedResoBin = std::numeric_limits<int>::min();
+        int cachedShapeBin = std::numeric_limits<int>::min();  // Renamed from cachedResoBin
 
         void init (double sr);
         void setTopology (int newAmount, int newSeries, bool newReverse,
-                          float initFreq, float initReso);
+                          float initFreq, float initShape);
 
         void processBlock (juce::AudioBuffer<float>& buffer,
-                           float freqNow, float resoNow,
+                           float freqNow, float shapeNow,
                            float outputGain = 1.0f);
 
         void ensureAllStages (int numStages);
@@ -199,7 +292,7 @@ private:
         static float amountNorm (int amount) noexcept;
         int windowSamplesFromAmount (int amount) const noexcept;
 
-        void updateCoefficientsNow (int amount, float freqHz, float reso);
+        void updateCoefficientsNow (int amount, float freqHz, float shape);
 
         // Swap contents with another Engine instance. We provide a custom
         // swap because the implicitly-deleted move/copy operations (due to
@@ -224,6 +317,8 @@ private:
     std::atomic<float>* resonanceParam = nullptr;
     std::atomic<float>* reverseParam = nullptr;
     std::atomic<float>* invParam = nullptr;
+    std::atomic<float>* s0Param = nullptr;
+    std::atomic<float>* s100Param = nullptr;
     std::atomic<float>* uiWidthParam = nullptr;
     std::atomic<float>* uiHeightParam = nullptr;
     std::atomic<float>* uiPaletteParam = nullptr;
@@ -264,7 +359,7 @@ private:
     };
 
     void startTransitionIfNeeded (int newAmount, int newSeries, bool newReverse,
-                                  float freqNow, float resoNow);
+                                  float freqNow, float shapeNow);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisperserAudioProcessor)
 };
