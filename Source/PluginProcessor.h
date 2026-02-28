@@ -106,6 +106,14 @@ private:
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
 	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
+	int computeRvsIrLengthSamples (int stages, int series) const noexcept;
+	void buildForwardImpulseResponse (std::vector<float>& ir,
+										 int irLength,
+										 int stages,
+										 int series,
+										 float freqHz,
+										 float shapeNorm) const;
+	void rebuildRvsConvolutionIfNeeded (int stages, int series, float freqHz, float shapeNorm, bool forceRebuild);
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
@@ -121,6 +129,22 @@ private:
 	float lastCoeffFreq = -1.0f;
 	float lastCoeffShape = -1.0f;
 	int lastCoeffStages = -1;
+
+	juce::dsp::Convolution rvsConvL { juce::dsp::Convolution::Latency { 1024 } };
+	juce::dsp::Convolution rvsConvR { juce::dsp::Convolution::Latency { 1024 } };
+	bool rvsConvPrepared = false;
+	bool rvsRebuildPending = false;
+	int rvsRebuildCooldownSamples = 0;
+	int pendingRvsStages = -1;
+	int pendingRvsSeries = -1;
+	float pendingRvsFreq = -1.0f;
+	float pendingRvsShape = -1.0f;
+	int lastRvsStages = -1;
+	int lastRvsSeries = -1;
+	float lastRvsFreq = -1.0f;
+	float lastRvsShape = -1.0f;
+	int lastRvsIrLength = -1;
+	static constexpr int kRvsRebuildMinIntervalMs = 200;
 
 	double currentSampleRate = 44100.0;
 

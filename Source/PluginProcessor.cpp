@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <cstring>
 
 namespace
 {
@@ -28,6 +29,52 @@ namespace
 			param->setValueNotifyingHost (norm);
 		}
 	}
+
+	inline void fillStageCoefficients (std::vector<float>& coeffOut,
+										 double sampleRate,
+										 float freqHz,
+										 float shapeNorm,
+										 int stages)
+	{
+		const int nStages = juce::jmax (1, stages);
+		coeffOut.assign ((size_t) nStages, 0.0f);
+
+		const float sr = (float) juce::jmax (1.0, sampleRate);
+		const float minFreq = 20.0f;
+		const float maxFreq = 0.49f * sr;
+		const float center = juce::jlimit (minFreq, maxFreq, freqHz);
+		const float shape = juce::jlimit (0.0f, 1.0f, shapeNorm);
+
+		const float logPos = std::log2 (center / minFreq) / std::log2 (maxFreq / minFreq);
+		const float lowComp = std::pow (juce::jlimit (0.0f, 1.0f, 1.0f - logPos), 1.15f);
+		const float shapeStrength = 1.0f + (0.95f * lowComp);
+		const float shapeComp = juce::jlimit (0.0f, 1.0f, 0.5f + ((shape - 0.5f) * shapeStrength));
+
+		const float spreadMax = 4.0f + (1.1f * lowComp);
+		const float spreadMin = 0.12f;
+		const float spreadOct = juce::jmap (shapeComp, spreadMax, spreadMin);
+		const float warpGamma = juce::jmap (shapeComp, 0.45f, 3.0f + (0.8f * lowComp));
+
+		if (nStages == 1)
+		{
+			const float t = std::tan (juce::MathConstants<float>::pi * center / sr);
+			coeffOut[0] = std::isfinite (t) ? (1.0f - t) / (1.0f + t) : 0.0f;
+			return;
+		}
+
+		const float denom = (float) juce::jmax (1, nStages - 1);
+		for (int i = 0; i < nStages; ++i)
+		{
+			const float u = (2.0f * ((float) i / denom)) - 1.0f;
+			const float absWarped = std::pow (std::abs (u), warpGamma);
+			const float warped = std::copysign (absWarped, u);
+			const float oct = 0.5f * spreadOct * warped;
+			const float f = juce::jlimit (minFreq, maxFreq, center * std::pow (2.0f, oct));
+			const float t = std::tan (juce::MathConstants<float>::pi * f / sr);
+			coeffOut[(size_t) i] = std::isfinite (t) ? (1.0f - t) / (1.0f + t) : 0.0f;
+		}
+	}
+
 }
 
 DisperserAudioProcessor::DisperserAudioProcessor()
@@ -95,7 +142,7 @@ void DisperserAudioProcessor::setCurrentProgram (int) {}
 const juce::String DisperserAudioProcessor::getProgramName (int) { return {}; }
 void DisperserAudioProcessor::changeProgramName (int, const juce::String&) {}
 
-void DisperserAudioProcessor::prepareToPlay (double sampleRate, int)
+void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
 	currentSampleRate = juce::jmax (1.0, sampleRate);
 	const int stages = juce::jlimit (kAmountMin, kAmountMax,
@@ -119,6 +166,42 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int)
 	lastCoeffFreq = -1.0f;
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
+
+	juce::dsp::ProcessSpec spec;
+	spec.sampleRate = currentSampleRate;
+	spec.maximumBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
+	spec.numChannels = 1;
+
+	rvsConvL.reset();
+	rvsConvR.reset();
+	rvsConvL.prepare (spec);
+	rvsConvR.prepare (spec);
+
+	juce::AudioBuffer<float> identityL (1, 1);
+	juce::AudioBuffer<float> identityR (1, 1);
+	identityL.setSample (0, 0, 1.0f);
+	identityR.setSample (0, 0, 1.0f);
+	rvsConvL.loadImpulseResponse (std::move (identityL), currentSampleRate,
+		juce::dsp::Convolution::Stereo::no,
+		juce::dsp::Convolution::Trim::no,
+		juce::dsp::Convolution::Normalise::no);
+	rvsConvR.loadImpulseResponse (std::move (identityR), currentSampleRate,
+		juce::dsp::Convolution::Stereo::no,
+		juce::dsp::Convolution::Trim::no,
+		juce::dsp::Convolution::Normalise::no);
+
+	rvsConvPrepared = true;
+	rvsRebuildPending = false;
+	rvsRebuildCooldownSamples = 0;
+	pendingRvsStages = -1;
+	pendingRvsSeries = -1;
+	pendingRvsFreq = -1.0f;
+	pendingRvsShape = -1.0f;
+	lastRvsStages = -1;
+	lastRvsSeries = -1;
+	lastRvsFreq = -1.0f;
+	lastRvsShape = -1.0f;
+	lastRvsIrLength = -1;
 }
 
 void DisperserAudioProcessor::releaseResources()
@@ -126,6 +209,11 @@ void DisperserAudioProcessor::releaseResources()
 	for (auto& c : chainL) c.clear();
 	for (auto& c : chainR) c.clear();
 	stageCoeff.clear();
+	rvsConvL.reset();
+	rvsConvR.reset();
+	rvsConvPrepared = false;
+	rvsRebuildPending = false;
+	rvsRebuildCooldownSamples = 0;
 }
 
 #if ! JucePlugin_PreferredChannelConfigurations
@@ -196,43 +284,116 @@ void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm,
 	if ((int) stageCoeff.size() < nStages)
 		stageCoeff.assign ((size_t) kAmountMax, 0.0f);
 
-	const float sr = (float) currentSampleRate;
-	const float minFreq = 20.0f;
-	const float maxFreq = 0.49f * sr;
-	const float center = juce::jlimit (minFreq, maxFreq, freqHz);
-	const float shape = juce::jlimit (0.0f, 1.0f, shapeNorm);
+	std::vector<float> coeff;
+	fillStageCoefficients (coeff, currentSampleRate, freqHz, shapeNorm, nStages);
+	for (int i = 0; i < nStages; ++i)
+		stageCoeff[(size_t) i] = coeff[(size_t) i];
+}
 
-	// Low-frequency compensation for SHAPE response:
-	// stronger pinch/excentricity modulation in lows, neutral in highs.
-	const float logPos = std::log2 (center / minFreq) / std::log2 (maxFreq / minFreq); // 0..1
-	const float lowComp = std::pow (juce::jlimit (0.0f, 1.0f, 1.0f - logPos), 1.15f);
-	const float shapeStrength = 1.0f + (0.95f * lowComp);
-	const float shapeComp = juce::jlimit (0.0f, 1.0f, 0.5f + ((shape - 0.5f) * shapeStrength));
+int DisperserAudioProcessor::computeRvsIrLengthSamples (int stages, int series) const noexcept
+{
+	const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
+	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
+	const int complexity = juce::jmax (1, nStages * nSeries);
+	const int len = 128 + (complexity * 4);
+	return juce::jlimit (128, 2048, len);
+}
 
-	// Shape control:
-	// - spreadOct: global width in octaves (0 -> very wide, 1 -> narrow/pinched)
-	// - warpGamma: redistributes stages inside that width so pinch remains audible
-	const float spreadMax = 4.0f + (1.1f * lowComp);
-	const float spreadMin = 0.12f;
-	const float spreadOct = juce::jmap (shapeComp, spreadMax, spreadMin);
-	const float warpGamma = juce::jmap (shapeComp, 0.45f, 3.0f + (0.8f * lowComp));
+void DisperserAudioProcessor::buildForwardImpulseResponse (std::vector<float>& ir,
+													  int irLength,
+													  int stages,
+													  int series,
+													  float freqHz,
+													  float shapeNorm) const
+{
+	const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
+	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
+	ir.assign ((size_t) juce::jmax (1, irLength), 0.0f);
 
-	if (nStages == 1)
+	if (nStages <= 0)
 	{
-		stageCoeff[0] = calcAllPassCoeff (center, sr);
+		ir[0] = 1.0f;
 		return;
 	}
 
-	const float denom = (float) juce::jmax (1, nStages - 1);
-	for (int i = 0; i < nStages; ++i)
+	std::vector<float> coeff;
+	fillStageCoefficients (coeff, currentSampleRate, freqHz, shapeNorm, nStages);
+
+	std::array<std::vector<AllPassState>, kSeriesMax> tmp;
+	for (int s = 0; s < nSeries; ++s)
+		tmp[(size_t) s].assign ((size_t) nStages, {});
+
+	for (int n = 0; n < irLength; ++n)
 	{
-		const float u = (2.0f * ((float) i / denom)) - 1.0f; // [-1, 1]
-		const float absWarped = std::pow (std::abs (u), warpGamma);
-		const float warped = std::copysign (absWarped, u);
-		const float oct = 0.5f * spreadOct * warped;
-		const float f = juce::jlimit (minFreq, maxFreq, center * std::pow (2.0f, oct));
-		stageCoeff[(size_t) i] = calcAllPassCoeff (f, sr);
+		float x = (n == 0) ? 1.0f : 0.0f;
+		for (int s = 0; s < nSeries; ++s)
+		{
+			auto* states = tmp[(size_t) s].data();
+			for (int st = 0; st < nStages; ++st)
+			{
+				const float a = coeff[(size_t) st];
+				auto& z = states[st];
+				const float y = (-a * x) + z.z1;
+				z.z1 = x + (a * y);
+				x = y;
+			}
+		}
+		ir[(size_t) n] = x;
 	}
+}
+
+void DisperserAudioProcessor::rebuildRvsConvolutionIfNeeded (int stages, int series, float freqHz, float shapeNorm, bool forceRebuild)
+{
+	if (! rvsConvPrepared)
+		return;
+
+	const int irLength = computeRvsIrLengthSamples (stages, series);
+	const bool changed = forceRebuild
+		|| stages != lastRvsStages
+		|| series != lastRvsSeries
+		|| irLength != lastRvsIrLength
+		|| std::abs (freqHz - lastRvsFreq) > 0.5f
+		|| std::abs (shapeNorm - lastRvsShape) > 0.002f;
+
+	if (! changed)
+		return;
+
+	std::vector<float> forwardIr;
+	buildForwardImpulseResponse (forwardIr, irLength, stages, series, freqHz, shapeNorm);
+
+	std::vector<float> reverseIr ((size_t) irLength, 0.0f);
+	for (int i = 0; i < irLength; ++i)
+		reverseIr[(size_t) i] = forwardIr[(size_t) (irLength - 1 - i)];
+
+	float peak = 0.0f;
+	for (const float sample : reverseIr)
+		peak = juce::jmax (peak, std::abs (sample));
+	if (peak > 1.0f)
+	{
+		const float gain = 1.0f / peak;
+		for (float& sample : reverseIr)
+			sample *= gain;
+	}
+
+	juce::AudioBuffer<float> irL (1, irLength);
+	juce::AudioBuffer<float> irR (1, irLength);
+	std::memcpy (irL.getWritePointer (0), reverseIr.data(), (size_t) irLength * sizeof (float));
+	std::memcpy (irR.getWritePointer (0), reverseIr.data(), (size_t) irLength * sizeof (float));
+
+	rvsConvL.loadImpulseResponse (std::move (irL), currentSampleRate,
+		juce::dsp::Convolution::Stereo::no,
+		juce::dsp::Convolution::Trim::no,
+		juce::dsp::Convolution::Normalise::no);
+	rvsConvR.loadImpulseResponse (std::move (irR), currentSampleRate,
+		juce::dsp::Convolution::Stereo::no,
+		juce::dsp::Convolution::Trim::no,
+		juce::dsp::Convolution::Normalise::no);
+
+	lastRvsStages = stages;
+	lastRvsSeries = series;
+	lastRvsFreq = freqHz;
+	lastRvsShape = shapeNorm;
+	lastRvsIrLength = irLength;
 }
 
 void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -252,21 +413,76 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const int targetSeries = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
 	const float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
 	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
+	const bool reverseEnabled = loadBoolParamOrDefault (reverseParam, false);
 
 	// Debug overrides preserved.
 	if (loadBoolParamOrDefault (s0Param, false))
 		targetShape = 0.0f;
 	if (loadBoolParamOrDefault (s100Param, false))
 		targetShape = 1.0f;
+	const bool invEnabled = loadBoolParamOrDefault (invParam, false);
 
 	stagesSmoothed.setTargetValue ((float) targetStages);
 	freqSmoothed.setTargetValue (targetFreq);
 	shapeSmoothed.setTargetValue (targetShape);
 
+	if (reverseEnabled)
+	{
+		stagesSmoothed.setCurrentAndTargetValue ((float) targetStages);
+		freqSmoothed.setCurrentAndTargetValue (targetFreq);
+		shapeSmoothed.setCurrentAndTargetValue (targetShape);
+
+		const float quantShape = std::round (targetShape * 100.0f) * 0.01f;
+		const float freqOct = std::log2 (juce::jmax (20.0f, targetFreq) / 20.0f);
+		const float quantFreq = 20.0f * std::pow (2.0f, std::round (freqOct * 24.0f) / 24.0f);
+
+		const bool paramsChanged = (targetStages != lastRvsStages)
+			|| (targetSeries != lastRvsSeries)
+			|| (std::abs (quantFreq - lastRvsFreq) > 0.01f)
+			|| (std::abs (quantShape - lastRvsShape) > 0.0001f);
+
+		if (paramsChanged)
+		{
+			rvsRebuildPending = true;
+			pendingRvsStages = targetStages;
+			pendingRvsSeries = targetSeries;
+			pendingRvsFreq = quantFreq;
+			pendingRvsShape = quantShape;
+		}
+
+		rvsRebuildCooldownSamples = juce::jmax (0, rvsRebuildCooldownSamples - numSamples);
+		if (rvsRebuildPending && rvsRebuildCooldownSamples <= 0)
+		{
+			rebuildRvsConvolutionIfNeeded (pendingRvsStages,
+				pendingRvsSeries,
+				pendingRvsFreq,
+				pendingRvsShape,
+				false);
+			rvsRebuildPending = false;
+			rvsRebuildCooldownSamples = (int) std::round ((currentSampleRate * kRvsRebuildMinIntervalMs) / 1000.0);
+		}
+
+		auto block = juce::dsp::AudioBlock<float> (buffer);
+		auto left = block.getSingleChannelBlock (0);
+		juce::dsp::ProcessContextReplacing<float> ctxL (left);
+		rvsConvL.process (ctxL);
+
+		if (numChannels > 1)
+		{
+			auto right = block.getSingleChannelBlock (1);
+			juce::dsp::ProcessContextReplacing<float> ctxR (right);
+			rvsConvR.process (ctxR);
+		}
+
+		if (invEnabled)
+			buffer.applyGain (-1.0f);
+
+		return;
+	}
+
 	if (targetSeries > activeSeries)
 		clearStageRange (0, kAmountMax, targetSeries);
 	activeSeries = targetSeries;
-	const bool invEnabled = loadBoolParamOrDefault (invParam, false);
 
 	auto* ch0 = buffer.getWritePointer (0);
 	float* ch1 = (numChannels > 1) ? buffer.getWritePointer (1) : nullptr;
@@ -355,8 +571,6 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	if (invEnabled)
 		buffer.applyGain (-1.0f);
-
-	juce::ignoreUnused (reverseParam); // RVS se implementará después.
 }
 
 bool DisperserAudioProcessor::hasEditor() const { return true; }
