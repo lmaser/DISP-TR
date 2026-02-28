@@ -51,4 +51,4 @@ It reshapes transients and phase response without classic EQ-style magnitude boo
 ## TODO
 
 - [ ] Revisit parameter smoothing and fine-tune the `RVS` settle/rebuild window if needed.
-- [ ] Validate stability again with guitar input at 64-sample buffer in `RVS` mode.
+- [ ] Review GUI layout and identify potential graphics bottlenecks.
