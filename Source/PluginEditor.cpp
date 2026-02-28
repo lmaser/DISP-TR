@@ -784,27 +784,27 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawLinearSlider (juce::Graphics
     g.fillRect (fill);
 }
 
-void DisperserAudioProcessorEditor::MinimalLNF::drawTickBox (juce::Graphics& g, juce::Component&,
+void DisperserAudioProcessorEditor::MinimalLNF::drawTickBox (juce::Graphics& g, juce::Component& button,
                                                             float x, float y, float w, float h,
                                                             bool ticked, bool /*isEnabled*/,
                                                             bool /*highlighted*/, bool /*down*/)
 {
-    const float base   = juce::jmax (w, h);
-    const float forced = base * UiMetrics::tickBoxOuterScale;
+    juce::ignoreUnused (x, y, w, h);
 
-    const float cx = x + (w * 0.5f);
-    const float cy = y + (h * 0.5f);
-    const float horizontalBias = forced * UiMetrics::tickBoxHorizontalBiasRatio;
+    const auto local = button.getLocalBounds().toFloat().reduced (1.0f);
+    const float side = juce::jlimit (14.0f,
+                                     juce::jmax (14.0f, local.getHeight() - 2.0f),
+                                     std::round (local.getHeight() * 0.62f));
 
-    juce::Rectangle<float> r (cx - forced * 0.5f + horizontalBias,
-                              cy - forced * 0.5f,
-                              forced,
-                              forced);
+    auto r = juce::Rectangle<float> (local.getX() + 2.0f,
+                                     local.getCentreY() - (side * 0.5f),
+                                     side,
+                                     side).getIntersection (local);
 
     g.setColour (scheme.outline);
     g.drawRect (r, 4.0f);
 
-    const float innerInset = juce::jlimit (1.0f, forced * 0.45f, forced * UiMetrics::tickBoxInnerInsetRatio);
+    const float innerInset = juce::jlimit (1.0f, side * 0.45f, side * UiMetrics::tickBoxInnerInsetRatio);
     auto inner = r.reduced (innerInset);
 
     if (ticked)
@@ -2746,7 +2746,7 @@ namespace
 
     constexpr int kValueAreaHeightPx = 44;
     constexpr int kValueAreaRightMarginPx = 24;
-    constexpr int kToggleLabelGapPx = -32;
+    constexpr int kToggleLabelGapPx = 4;
     constexpr int kToggleLabelRightPadPx = 10;
     constexpr int kResizerCornerPx = 22;
     constexpr int kToggleBoxPx = 72;
@@ -2905,12 +2905,24 @@ juce::Slider* DisperserAudioProcessorEditor::getSliderForValueAreaPoint (juce::P
 
 namespace
 {
+    int getToggleVisualBoxSidePx (const juce::Component& button)
+    {
+        const int h = button.getHeight();
+        return juce::jlimit (14, juce::jmax (14, h - 2), (int) std::lround ((double) h * 0.62));
+    }
+
+    int getToggleVisualBoxLeftPx (const juce::Component& button)
+    {
+        return button.getX() + 2;
+    }
+
     juce::Rectangle<int> makeToggleLabelArea (const juce::Component& button,
                                               int editorWidth,
                                               const juce::String& labelText)
     {
         const auto b = button.getBounds();
-        const int x = b.getRight() + kToggleLabelGapPx;
+        const int visualRight = getToggleVisualBoxLeftPx (button) + getToggleVisualBoxSidePx (button);
+        const int x = visualRight + kToggleLabelGapPx;
 
         juce::Font labelFont (juce::FontOptions (40.0f).withStyle ("Bold"));
         const int desiredW = stringWidth (labelFont, labelText) + 2;
