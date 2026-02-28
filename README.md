@@ -47,3 +47,8 @@ It reshapes transients and phase response without classic EQ-style magnitude boo
 - Parameter smoothing is implemented for `Stages`, `Frequency`, and `Shape` to improve transition behavior during control changes.
 - UI state (size and palette options) is persisted.
 - Some internal/debug parameters may exist in project state but are not part of the normal end-user workflow (UI Width & Height)
+
+## TODO
+
+- [ ] Revisit parameter smoothing and fine-tune the `RVS` settle/rebuild window if needed.
+- [ ] Validate stability again with guitar input at 64-sample buffer in `RVS` mode.
