@@ -794,7 +794,7 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawTickBox (juce::Graphics& g, 
     const auto local = button.getLocalBounds().toFloat().reduced (1.0f);
     const float side = juce::jlimit (14.0f,
                                      juce::jmax (14.0f, local.getHeight() - 2.0f),
-                                     std::round (local.getHeight() * 0.62f));
+                                     std::round (local.getHeight() * 0.50f));
 
     auto r = juce::Rectangle<float> (local.getX() + 2.0f,
                                      local.getCentreY() - (side * 0.5f),
@@ -1728,11 +1728,16 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     auto* okBtn = aw.getNumButtons() > 0 ? aw.getButton (0) : nullptr;
 
     constexpr int toggleBox = GraphicsPromptLayout::toggleBox;
-    constexpr int toggleGap = GraphicsPromptLayout::toggleGap;
+    constexpr int toggleGap = 4;
+    constexpr int toggleVisualInsetLeft = 2;
     constexpr int swatchSize = GraphicsPromptLayout::swatchSize;
     constexpr int swatchGap = GraphicsPromptLayout::swatchGap;
     constexpr int columnGap = GraphicsPromptLayout::columnGap;
     constexpr int titleH = GraphicsPromptLayout::titleHeight;
+
+    const int toggleVisualSide = juce::jlimit (14,
+                                               juce::jmax (14, toggleBox - 2),
+                                               (int) std::lround ((double) toggleBox * 0.50));
 
     const int swatchGroupSize = (2 * swatchSize) + swatchGap;
     const int swatchesH = swatchGroupSize;
@@ -1756,9 +1761,10 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
                        ? juce::jmax (90, stringWidth (fxLabel->getFont(), fxLabel->getText().toUpperCase()) + 2)
                        : 96;
 
-    const int dfltRowW = toggleBox + toggleGap + dfltLabelW;
-    const int customRowW = toggleBox + toggleGap + customLabelW;
-    const int fxRowW = toggleBox + toggleGap + fxLabelW;
+    const int toggleLabelStartOffset = toggleVisualInsetLeft + toggleVisualSide + toggleGap;
+    const int dfltRowW = toggleLabelStartOffset + dfltLabelW;
+    const int customRowW = toggleLabelStartOffset + customLabelW;
+    const int fxRowW = toggleLabelStartOffset + fxLabelW;
     const int okBtnW = (okBtn != nullptr) ? okBtn->getWidth() : 96;
 
     const int leftColumnW = juce::jmax (swatchGroupSize, juce::jmax (dfltRowW, fxRowW));
@@ -1784,9 +1790,9 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     }
 
     if (dfltToggle != nullptr)   dfltToggle->setBounds (dfltX, modeY, toggleBox, toggleBox);
-    if (dfltLabel != nullptr)    dfltLabel->setBounds (dfltX + toggleBox + toggleGap, modeY, dfltLabelW, toggleBox);
+    if (dfltLabel != nullptr)    dfltLabel->setBounds (dfltX + toggleLabelStartOffset, modeY, dfltLabelW, toggleBox);
     if (customToggle != nullptr) customToggle->setBounds (customX, modeY, toggleBox, toggleBox);
-    if (customLabel != nullptr)  customLabel->setBounds (customX + toggleBox + toggleGap, modeY, customLabelW, toggleBox);
+    if (customLabel != nullptr)  customLabel->setBounds (customX + toggleLabelStartOffset, modeY, customLabelW, toggleBox);
 
     auto placeSwatchGroup = [&] (const juce::String& prefix, int startX)
     {
@@ -1820,7 +1826,7 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
                 const int fxY = snapEven (okR.getY() + juce::jmax (0, (okR.getHeight() - toggleBox) / 2));
                 const int fxX = col0X;
                 if (fxToggle != nullptr) fxToggle->setBounds (fxX, fxY, toggleBox, toggleBox);
-                if (fxLabel != nullptr)  fxLabel->setBounds (fxX + toggleBox + toggleGap, fxY, fxLabelW, toggleBox);
+                if (fxLabel != nullptr)  fxLabel->setBounds (fxX + toggleLabelStartOffset, fxY, fxLabelW, toggleBox);
             }
     }
 
@@ -2908,7 +2914,7 @@ namespace
     int getToggleVisualBoxSidePx (const juce::Component& button)
     {
         const int h = button.getHeight();
-        return juce::jlimit (14, juce::jmax (14, h - 2), (int) std::lround ((double) h * 0.62));
+        return juce::jlimit (14, juce::jmax (14, h - 2), (int) std::lround ((double) h * 0.50));
     }
 
     int getToggleVisualBoxLeftPx (const juce::Component& button)
@@ -3367,8 +3373,13 @@ void DisperserAudioProcessorEditor::resized()
     const int invLabelW = stringWidth (labelFont, "INV") + 2;
     const int labelGap = kToggleLabelGapPx;
 
-    const int rvsBlockW = juce::jmax (verticalLayout.box, verticalLayout.box + labelGap + rvsLabelW);
-    const int invBlockW = juce::jmax (verticalLayout.box, verticalLayout.box + labelGap + invLabelW);
+    const int toggleVisualSide = juce::jlimit (14,
+                                               juce::jmax (14, verticalLayout.box - 2),
+                                               (int) std::lround ((double) verticalLayout.box * 0.50));
+    const int toggleHitW = toggleVisualSide + 6;
+
+    const int rvsBlockW = juce::jmax (toggleHitW, toggleHitW + labelGap + rvsLabelW);
+    const int invBlockW = juce::jmax (toggleHitW, toggleHitW + labelGap + invLabelW);
 
     const int valueStartX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
     const int rvsAnchorX = horizontalLayout.leftX;
@@ -3384,8 +3395,8 @@ void DisperserAudioProcessorEditor::resized()
     else
         invBlockX = invMaxX;
 
-    rvsButton.setBounds (rvsBlockX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
-    invButton.setBounds (invBlockX, verticalLayout.btnY, verticalLayout.box, verticalLayout.box);
+    rvsButton.setBounds (rvsBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
+    invButton.setBounds (invBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
 
     if (resizerCorner != nullptr)
         resizerCorner->setBounds (W - kResizerCornerPx, H - kResizerCornerPx, kResizerCornerPx, kResizerCornerPx);
