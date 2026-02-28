@@ -45,6 +45,7 @@ It reshapes transients and phase response without classic EQ-style magnitude boo
 ## Notes
 
 - Parameter smoothing is implemented for `Stages`, `Frequency`, and `Shape` to improve transition behavior during control changes.
+- Graphics options are available from the gear icon (`Info -> Graphics`): you can toggle `TEXT FX` and enable `Custom Palette` there.
 - UI state (size and palette options) is persisted.
 - Some internal/debug parameters may exist in project state but are not part of the normal end-user workflow (UI Width & Height)
 
