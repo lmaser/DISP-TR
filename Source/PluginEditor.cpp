@@ -1505,15 +1505,39 @@ static void layoutInfoPopupContent (juce::AlertWindow& aw)
 
     const int contentTop = kPromptBodyTopPad;
     const int contentBottom = getAlertButtonsTop (aw) - kPromptBodyBottomPad;
+    const int contentH = juce::jmax (0, contentBottom - contentTop);
 
-    if (auto* infoLabel = dynamic_cast<juce::Label*> (aw.findChildWithID ("infoText")))
+    auto* infoLabel = dynamic_cast<juce::Label*> (aw.findChildWithID ("infoText"));
+    auto* infoLink = dynamic_cast<juce::HyperlinkButton*> (aw.findChildWithID ("infoLink"));
+
+    if (infoLabel != nullptr && infoLink != nullptr)
     {
-        const int labelY = contentTop;
-        const int labelH = juce::jmax (20, contentBottom - labelY);
+        const int labelH = juce::jlimit (26, juce::jmax (26, contentH), (int) std::lround (contentH * 0.34));
+        const int linkH = juce::jlimit (20, 34, (int) std::lround (contentH * 0.18));
+
+        const int freeH = juce::jmax (0, contentH - labelH - linkH);
+        const int gap = freeH / 3;
+        const int labelY = contentTop + gap;
+        const int linkY = labelY + labelH + gap;
+
         infoLabel->setBounds (kPromptInnerMargin,
                               labelY,
                               aw.getWidth() - (2 * kPromptInnerMargin),
                               labelH);
+
+        infoLink->setBounds (kPromptInnerMargin,
+                             linkY,
+                             aw.getWidth() - (2 * kPromptInnerMargin),
+                             linkH);
+        return;
+    }
+
+    if (infoLabel != nullptr)
+    {
+        infoLabel->setBounds (kPromptInnerMargin,
+                              contentTop,
+                              aw.getWidth() - (2 * kPromptInnerMargin),
+                              juce::jmax (20, contentH));
     }
 }
 
@@ -2305,6 +2329,17 @@ void DisperserAudioProcessorEditor::openInfoPopup()
     infoFont.setHeight (infoFont.getHeight() * 1.45f);
     infoLabel->setFont (infoFont);
     aw->addAndMakeVisible (infoLabel);
+
+    auto* infoLink = new juce::HyperlinkButton ("GitHub Repository",
+                                                juce::URL ("https://github.com/lmaser/DISP-TR"));
+    infoLink->setComponentID ("infoLink");
+    infoLink->setJustificationType (juce::Justification::centred);
+    infoLink->setColour (juce::HyperlinkButton::textColourId,
+                         schemes[(size_t) currentSchemeIndex].text);
+    auto linkFont = infoFont;
+    linkFont.setHeight (infoFont.getHeight() * 0.72f);
+    infoLink->setFont (linkFont, false, juce::Justification::centred);
+    aw->addAndMakeVisible (infoLink);
 
     layoutInfoPopupContent (*aw);
 
