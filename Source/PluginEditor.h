@@ -91,8 +91,6 @@ private:
 
     juce::ToggleButton rvsButton;
     juce::ToggleButton invButton;
-    juce::ToggleButton s0Button;
-    juce::ToggleButton s100Button;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -104,8 +102,6 @@ private:
 
     std::unique_ptr<ButtonAttachment> rvsAttachment;
     std::unique_ptr<ButtonAttachment> invAttachment;
-    std::unique_ptr<ButtonAttachment> s0Attachment;
-    std::unique_ptr<ButtonAttachment> s100Attachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
