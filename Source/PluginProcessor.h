@@ -14,7 +14,7 @@ public:
 	static constexpr const char* kParamAmount    = "amount";
 	static constexpr const char* kParamSeries    = "series";
 	static constexpr const char* kParamFreq      = "freq";
-	static constexpr const char* kParamResonance = "resonance";
+	static constexpr const char* kParamShape     = "shape";
 	static constexpr const char* kParamReverse   = "reverse";
 	static constexpr const char* kParamInv       = "inv";
 	static constexpr const char* kParamS0        = "s0";
@@ -37,7 +37,7 @@ public:
 	static constexpr int kSeriesDefault = 1;
 
 	static constexpr float kFreqDefault = 1000.0f;
-	static constexpr float kResonanceDefault = 0.0f;
+	static constexpr float kShapeDefault = 0.0f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -141,6 +141,7 @@ private:
 	bool rvsConvPrepared = false;
 	bool rvsRebuildPending = false;
 	int rvsRebuildCooldownSamples = 0;
+	int rvsStableSamples = 0;
 	int pendingRvsStages = -1;
 	int pendingRvsSeries = -1;
 	float pendingRvsFreq = -1.0f;
@@ -151,13 +152,14 @@ private:
 	float lastRvsShape = -1.0f;
 	int lastRvsIrLength = -1;
 	static constexpr int kRvsRebuildMinIntervalMs = 200;
+	static constexpr int kRvsSettleWindowMs = 120;
 
 	double currentSampleRate = 44100.0;
 
 	std::atomic<float>* amountParam = nullptr;
 	std::atomic<float>* seriesParam = nullptr;
 	std::atomic<float>* freqParam = nullptr;
-	std::atomic<float>* resonanceParam = nullptr;
+	std::atomic<float>* shapeParam = nullptr;
 	std::atomic<float>* reverseParam = nullptr;
 	std::atomic<float>* invParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;

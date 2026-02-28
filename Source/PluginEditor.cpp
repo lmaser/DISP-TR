@@ -952,7 +952,7 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawTooltip (juce::Graphics& g,
 DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProcessor& p)
 : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    const std::array<BarSlider*, 4> barSliders { &amountSlider, &seriesSlider, &freqSlider, &resonanceSlider };
+    const std::array<BarSlider*, 4> barSliders { &amountSlider, &seriesSlider, &freqSlider, &shapeSlider };
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
     fxTailEnabled = audioProcessor.getUiFxTailEnabled();
@@ -1005,7 +1005,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     amountSlider.setNumDecimalPlacesToDisplay (0);
     seriesSlider.setNumDecimalPlacesToDisplay (0);
     freqSlider.setNumDecimalPlacesToDisplay (3);
-    resonanceSlider.setNumDecimalPlacesToDisplay (2);
+    shapeSlider.setNumDecimalPlacesToDisplay (2);
 
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
@@ -1029,7 +1029,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindSlider (amountAttachment, DisperserAudioProcessor::kParamAmount, amountSlider, kDefaultAmount);
     bindSlider (seriesAttachment, DisperserAudioProcessor::kParamSeries, seriesSlider, kDefaultSeries);
     bindSlider (freqAttachment, DisperserAudioProcessor::kParamFreq, freqSlider, kDefaultFreq);
-    bindSlider (resonanceAttachment, DisperserAudioProcessor::kParamResonance, resonanceSlider, kDefaultReso);
+    bindSlider (shapeAttachment, DisperserAudioProcessor::kParamShape, shapeSlider, kDefaultShape);
 
     auto bindButton = [&] (std::unique_ptr<ButtonAttachment>& attachment,
                            const char* paramId,
@@ -1102,7 +1102,7 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     dismissEditorOwnedModalPrompts (lnf);
     setPromptOverlayActive (false);
 
-    const std::array<BarSlider*, 4> barSliders { &amountSlider, &seriesSlider, &freqSlider, &resonanceSlider };
+    const std::array<BarSlider*, 4> barSliders { &amountSlider, &seriesSlider, &freqSlider, &shapeSlider };
     for (auto* slider : barSliders)
         slider->removeListener (this);
 
@@ -1139,7 +1139,7 @@ void DisperserAudioProcessorEditor::sliderValueChanged (juce::Slider* slider)
 {
     auto isBarSlider = [&] (const juce::Slider* s)
     {
-        return s == &amountSlider || s == &seriesSlider || s == &freqSlider || s == &resonanceSlider;
+        return s == &amountSlider || s == &seriesSlider || s == &freqSlider || s == &shapeSlider;
     };
 
     const int previousMode = labelVisibilityMode;
@@ -1178,7 +1178,7 @@ void DisperserAudioProcessorEditor::setPromptOverlayActive (bool shouldBeActive)
 
     const bool enableControls = ! shouldBeActive;
     const std::array<juce::Component*, 6> interactiveControls {
-        &amountSlider, &seriesSlider, &freqSlider, &resonanceSlider, &rvsButton, &invButton
+        &amountSlider, &seriesSlider, &freqSlider, &shapeSlider, &rvsButton, &invButton
     };
     for (auto* control : interactiveControls)
         control->setEnabled (enableControls);
@@ -1304,16 +1304,16 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const int amountV = (int) std::llround (amountSlider.getValue());
     const int seriesV = (int) std::llround (seriesSlider.getValue());
     const double hz = freqSlider.getValue();
-    const double resonanceV = juce::jlimit (0.0, 1.0, resonanceSlider.getValue());
-    const int resonancePct = (int) std::lround (resonanceV * 100.0);
+    const double shapeV = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
+    const int shapePct = (int) std::lround (shapeV * 100.0);
 
     const auto oldAmountFullLen = cachedAmountTextFull.length();
     const auto oldAmountShortLen = cachedAmountTextShort.length();
     const auto oldSeriesFullLen = cachedSeriesTextFull.length();
     const auto oldSeriesShortLen = cachedSeriesTextShort.length();
     const auto oldFreqLen = cachedFreqTextHz.length();
-    const auto oldResoFullLen = cachedResoTextFull.length();
-    const auto oldResoShortLen = cachedResoTextShort.length();
+    const auto oldShapeFullLen = cachedShapeTextFull.length();
+    const auto oldShapeShortLen = cachedShapeTextShort.length();
 
     cachedAmountTextFull  = juce::String (amountV) + " STAGES";
     cachedAmountTextShort = juce::String (amountV) + " STG";
@@ -1325,17 +1325,17 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedFreqIntOnly = cachedFreqTextHz.upToFirstOccurrenceOf (".", false, false)
                                      .upToFirstOccurrenceOf (" HZ", false, false);
 
-    cachedResoTextFull = juce::String (resonancePct).toUpperCase() + "% SHAPE";
-    cachedResoTextShort = juce::String (resonancePct).toUpperCase() + "% SHP";
-    cachedResoIntOnly = juce::String (resonancePct);
+    cachedShapeTextFull = juce::String (shapePct).toUpperCase() + "% SHAPE";
+    cachedShapeTextShort = juce::String (shapePct).toUpperCase() + "% SHP";
+    cachedShapeIntOnly = juce::String (shapePct);
 
     const bool lengthChanged = oldAmountFullLen  != cachedAmountTextFull.length()
                             || oldAmountShortLen != cachedAmountTextShort.length()
                             || oldSeriesFullLen  != cachedSeriesTextFull.length()
                             || oldSeriesShortLen != cachedSeriesTextShort.length()
                             || oldFreqLen        != cachedFreqTextHz.length()
-                            || oldResoFullLen    != cachedResoTextFull.length()
-                            || oldResoShortLen   != cachedResoTextShort.length();
+                            || oldShapeFullLen   != cachedShapeTextFull.length()
+                            || oldShapeShortLen  != cachedShapeTextShort.length();
 
     return lengthChanged;
 }
@@ -1940,9 +1940,9 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     if (&s == &amountSlider)         suffix = " STAGES";
     else if (&s == &seriesSlider)    suffix = " SERIES";
     else if (&s == &freqSlider)      suffix = " HZ";
-    else if (&s == &resonanceSlider) suffix = " % SHAPE";
+    else if (&s == &shapeSlider) suffix = " % SHAPE";
     const juce::String suffixText = suffix.trimStart();
-    const bool isShapePrompt = (&s == &resonanceSlider);
+    const bool isShapePrompt = (&s == &shapeSlider);
 
     // Sin texto de prompt: solo input + OK/Cancel
     auto* aw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
@@ -1968,12 +1968,12 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     {
         double minVal, maxVal;
         int maxLen, maxDecimals;
-        bool isResonance = false;
+        bool isShape = false;
 
-        NumericInputFilter (double minV, double maxV,
-                            int maxLength, int maxDecs, bool isReso = false)
+                NumericInputFilter (double minV, double maxV,
+                                                        int maxLength, int maxDecs, bool isShapeValue = false)
             : minVal (minV), maxVal (maxV),
-              maxLen (maxLength), maxDecimals (maxDecs), isResonance (isReso) {}
+                            maxLen (maxLength), maxDecimals (maxDecs), isShape (isShapeValue) {}
 
         juce::String filterNewText (juce::TextEditor& editor,
                                     const juce::String& newText) override
@@ -2131,7 +2131,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             maxDecs = 3;
             maxLen = 9; // "20000.000" (5 digits + dot + 3)
         }
-        else if (&s == &resonanceSlider)
+        else if (&s == &shapeSlider)
         {
             minVal = 0.0;
             maxVal = 100.0;    // user types percent
@@ -2139,9 +2139,9 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             maxLen = 8; // "100.0000" (3 digits + dot + 4)
         }
 
-        bool isReso = (&s == &resonanceSlider);
+        bool isShape = (&s == &shapeSlider);
         const bool isFreq = (&s == &freqSlider);
-        te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs, isReso), true);
+        te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs, isShape), true);
 
         // limit text to four decimals and move the suffix when text changes
         te->onTextChange = [te, layoutValueAndSuffix, isFreq]() mutable
@@ -2290,8 +2290,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             const juce::String numericToken = t.initialSectionContainingOnly ("0123456789.,-");
             double v = numericToken.getDoubleValue();
 
-            // user typed percent for resonance; convert to slider's [0,1] range
-            if (safeThis != nullptr && sliderPtr == &safeThis->resonanceSlider)
+            // user typed percent for shape; convert to slider's [0,1] range
+            if (safeThis != nullptr && sliderPtr == &safeThis->shapeSlider)
                 v *= 0.01;
 
             const auto range = sliderPtr->getRange();
@@ -2753,16 +2753,16 @@ juce::String DisperserAudioProcessorEditor::getFreqText() const
     return juce::String (hz, 2).toUpperCase() + " HZ";
 }
 
-juce::String DisperserAudioProcessorEditor::getResoText() const
+juce::String DisperserAudioProcessorEditor::getShapeText() const
 {
-    const double v = juce::jlimit (0.0, 1.0, resonanceSlider.getValue());
+    const double v = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
     const int pctInt = (int) std::lround (v * 100.0);
     return juce::String (pctInt).toUpperCase() + "% SHAPE";
 }
 
-juce::String DisperserAudioProcessorEditor::getResoTextShort() const
+juce::String DisperserAudioProcessorEditor::getShapeTextShort() const
 {
-    const double v = juce::jlimit (0.0, 1.0, resonanceSlider.getValue());
+    const double v = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
     const int pctInt = (int) std::lround (v * 100.0);
     return juce::String (pctInt).toUpperCase() + "% SHP";
 }
@@ -2781,9 +2781,9 @@ namespace
     constexpr const char* kFreqLegendAlt     = "20.00 KHZ";
     constexpr const char* kFreqLegendInt     = "20000";
 
-    constexpr const char* kResoLegendFull    = "100% SHAPE";
-    constexpr const char* kResoLegendShort   = "100% SHP";
-    constexpr const char* kResoLegendInt     = "100";
+    constexpr const char* kShapeLegendFull   = "100% SHAPE";
+    constexpr const char* kShapeLegendShort  = "100% SHP";
+    constexpr const char* kShapeLegendInt    = "100";
 
     constexpr int kValueAreaHeightPx = 44;
     constexpr int kValueAreaRightMarginPx = 24;
@@ -2899,11 +2899,11 @@ int DisperserAudioProcessorEditor::getTargetValueColumnWidth() const
                                      juce::jmax (stringWidth (font, kFreqLegendAlt),
                                                  stringWidth (font, kFreqLegendInt)));
 
-    const int resoMaxW = juce::jmax (stringWidth (font, kResoLegendFull),
-                                     juce::jmax (stringWidth (font, kResoLegendShort),
-                                                 stringWidth (font, kResoLegendInt)));
+    const int shapeMaxW = juce::jmax (stringWidth (font, kShapeLegendFull),
+                                      juce::jmax (stringWidth (font, kShapeLegendShort),
+                                                  stringWidth (font, kShapeLegendInt)));
 
-    const int maxW = juce::jmax (juce::jmax (amountMaxW, seriesMaxW), juce::jmax (freqMaxW, resoMaxW));
+    const int maxW = juce::jmax (juce::jmax (amountMaxW, seriesMaxW), juce::jmax (freqMaxW, shapeMaxW));
 
     const int desired = maxW + 16;
     const int minW = 90;
@@ -2938,8 +2938,8 @@ juce::Slider* DisperserAudioProcessorEditor::getSliderForValueAreaPoint (juce::P
     if (getValueAreaFor (freqSlider.getBounds()).contains (p))
         return &freqSlider;
 
-    if (getValueAreaFor (resonanceSlider.getBounds()).contains (p))
-        return &resonanceSlider;
+    if (getValueAreaFor (shapeSlider.getBounds()).contains (p))
+        return &shapeSlider;
 
     return nullptr;
 }
@@ -3047,7 +3047,7 @@ void DisperserAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& e)
         if (slider == &amountSlider)          slider->setValue (kDefaultAmount, juce::sendNotificationSync);
         else if (slider == &seriesSlider)     slider->setValue (kDefaultSeries, juce::sendNotificationSync);
         else if (slider == &freqSlider)       slider->setValue (kDefaultFreq, juce::sendNotificationSync);
-        else if (slider == &resonanceSlider)  slider->setValue (kDefaultReso, juce::sendNotificationSync);
+        else if (slider == &shapeSlider)      slider->setValue (kDefaultShape, juce::sendNotificationSync);
         return;
     }
 }
@@ -3062,7 +3062,7 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
     const auto amountValueArea = getValueAreaFor (amountSlider.getBounds());
     const auto seriesValueArea = getValueAreaFor (seriesSlider.getBounds());
     const auto freqValueArea = getValueAreaFor (freqSlider.getBounds());
-    const auto resonanceValueArea = getValueAreaFor (resonanceSlider.getBounds());
+    const auto shapeValueArea = getValueAreaFor (shapeSlider.getBounds());
 
     const auto scheme = schemes[(size_t) currentSchemeIndex];
     const bool useShortLabels = (labelVisibilityMode == 1);
@@ -3232,11 +3232,11 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
     }
 
     {
-        const juce::String intOnly = cachedResoIntOnly;
+        const juce::String intOnly = cachedShapeIntOnly;
 
-        drawLegendForMode (resonanceValueArea,
-                           cachedResoTextFull,
-                           cachedResoTextShort,
+        drawLegendForMode (shapeValueArea,
+                   cachedShapeTextFull,
+                   cachedShapeTextShort,
                            intOnly,
                            barTailTuning);
     }
@@ -3325,33 +3325,33 @@ void DisperserAudioProcessorEditor::updateLegendVisibility()
     auto areaAmount = getValueAreaFor (amountSlider.getBounds());
     auto areaSeries = getValueAreaFor (seriesSlider.getBounds());
     auto areaFreq   = getValueAreaFor (freqSlider.getBounds());
-    auto areaResonance = getValueAreaFor (resonanceSlider.getBounds());
+    auto areaShape = getValueAreaFor (shapeSlider.getBounds());
 
     // Check FULL versions using fixed worst-case templates (stable, value-independent)
     const juce::String amountFull  = kAmountLegendFull;
     const juce::String freqFull    = kFreqLegendDisplay;
     const juce::String seriesFull  = kSeriesLegendFull;
-    const juce::String resoFull    = kResoLegendFull;
+    const juce::String shapeFull   = kShapeLegendFull;
 
     const bool amountFullFits = fitsWithOptionalShrink_NoG (measureFont, amountFull, areaAmount.getWidth(), baseFontPx, softShrinkFloorFull);
     const bool freqFullFits = fitsWithOptionalShrink_NoG (measureFont, freqFull, areaFreq.getWidth(), baseFontPx, softShrinkFloorFull);
     const bool seriesFullFits = fitsWithOptionalShrink_NoG (measureFont, seriesFull, areaSeries.getWidth(), baseFontPx, softShrinkFloorFull);
-    const bool resoFullFits = fitsWithOptionalShrink_NoG (measureFont, resoFull, areaResonance.getWidth(), baseFontPx, softShrinkFloorFull);
+    const bool shapeFullFits = fitsWithOptionalShrink_NoG (measureFont, shapeFull, areaShape.getWidth(), baseFontPx, softShrinkFloorFull);
 
     // Check SHORT versions using fixed worst-case templates (stable, value-independent)
     const juce::String amountShort = kAmountLegendShort;
     const juce::String freqShort   = kFreqLegendDisplay;
     const juce::String seriesShort = kSeriesLegendShort;
-    const juce::String resoShort   = kResoLegendShort;
+    const juce::String shapeShort  = kShapeLegendShort;
 
     const bool amountShortFits = fitsWithOptionalShrink_NoG (measureFont, amountShort, areaAmount.getWidth(), baseFontPx, softShrinkFloorShort);
     const bool freqShortFits = fitsWithOptionalShrink_NoG (measureFont, freqShort, areaFreq.getWidth(), baseFontPx, softShrinkFloorShort);
     const bool seriesShortFits = fitsWithOptionalShrink_NoG (measureFont, seriesShort, areaSeries.getWidth(), baseFontPx, softShrinkFloorShort);
-    const bool resoShortFits = fitsWithOptionalShrink_NoG (measureFont, resoShort, areaResonance.getWidth(), baseFontPx, softShrinkFloorShort);
+    const bool shapeShortFits = fitsWithOptionalShrink_NoG (measureFont, shapeShort, areaShape.getWidth(), baseFontPx, softShrinkFloorShort);
 
     // Determine global mode: 0=Full, 1=Short, 2=None
-    const bool anyFullFailed = (!amountFullFits || !freqFullFits || !seriesFullFits || !resoFullFits);
-    const bool anyShortFailed = (!amountShortFits || !freqShortFits || !seriesShortFits || !resoShortFits);
+    const bool anyFullFailed = (!amountFullFits || !freqFullFits || !seriesFullFits || !shapeFullFits);
+    const bool anyShortFailed = (!amountShortFits || !freqShortFits || !seriesShortFits || !shapeShortFits);
 
     if (anyShortFailed)
         labelVisibilityMode = 2;  // None
@@ -3398,7 +3398,7 @@ void DisperserAudioProcessorEditor::resized()
     amountSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 0 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
     seriesSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 1 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
     freqSlider.setBounds      (horizontalLayout.leftX, verticalLayout.topY + 2 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    resonanceSlider.setBounds (horizontalLayout.leftX, verticalLayout.topY + 3 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
+    shapeSlider.setBounds     (horizontalLayout.leftX, verticalLayout.topY + 3 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
 
     const int buttonAreaX = horizontalLayout.leftX;
     const int buttonAreaW = horizontalLayout.contentW;

@@ -29,6 +29,7 @@ JuceLibraryCode/*.sdf
 
 # Other
 *.log
+/dumps/
 *.vspscc
 _ReSharper*/
 /.vscode/

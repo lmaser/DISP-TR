@@ -75,6 +75,15 @@ namespace
 		}
 	}
 
+	inline float mapReverseFrequencyFromControl (float frequencyHz) noexcept
+	{
+		const juce::NormalisableRange<float> frequencyRange (20.0f, 20000.0f, 0.0f, 0.35f);
+		const float clamped = juce::jlimit (frequencyRange.start, frequencyRange.end, frequencyHz);
+		const float normalised = juce::jlimit (0.0f, 1.0f, frequencyRange.convertTo0to1 (clamped));
+		const float invertedNormalised = 1.0f - normalised;
+		return frequencyRange.convertFrom0to1 (invertedNormalised);
+	}
+
 }
 
 DisperserAudioProcessor::DisperserAudioProcessor()
@@ -93,7 +102,7 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	amountParam = apvts.getRawParameterValue (kParamAmount);
 	seriesParam = apvts.getRawParameterValue (kParamSeries);
 	freqParam = apvts.getRawParameterValue (kParamFreq);
-	resonanceParam = apvts.getRawParameterValue (kParamResonance);
+	shapeParam = apvts.getRawParameterValue (kParamShape);
 	reverseParam = apvts.getRawParameterValue (kParamReverse);
 	invParam = apvts.getRawParameterValue (kParamInv);
 	s0Param = apvts.getRawParameterValue (kParamS0);
@@ -150,7 +159,7 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	const int series = juce::jlimit (kSeriesMin, kSeriesMax,
 									 loadIntParamOrDefault (seriesParam, kSeriesDefault));
 	const float freq = loadAtomicOrDefault (freqParam, kFreqDefault);
-	const float shape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
+	const float shape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (shapeParam, kShapeDefault));
 
 	resizeDspState (kAmountMax, kSeriesMax);
 	activeStages = stages;
@@ -201,6 +210,7 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	rvsConvPrepared = true;
 	rvsRebuildPending = false;
 	rvsRebuildCooldownSamples = 0;
+	rvsStableSamples = 0;
 	pendingRvsStages = -1;
 	pendingRvsSeries = -1;
 	pendingRvsFreq = -1.0f;
@@ -222,6 +232,7 @@ void DisperserAudioProcessor::releaseResources()
 	rvsConvPrepared = false;
 	rvsRebuildPending = false;
 	rvsRebuildCooldownSamples = 0;
+	rvsStableSamples = 0;
 	rvsCoeffScratch.clear();
 	rvsForwardIrScratch.clear();
 	rvsReverseIrScratch.clear();
@@ -457,9 +468,11 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	const int targetStages = juce::jlimit (kAmountMin, kAmountMax, loadIntParamOrDefault (amountParam, kAmountDefault));
 	const int targetSeries = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
-	const float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
-	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
+	float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
+	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (shapeParam, kShapeDefault));
 	const bool reverseEnabled = loadBoolParamOrDefault (reverseParam, false);
+	if (reverseEnabled)
+		targetFreq = mapReverseFrequencyFromControl (targetFreq);
 
 	// Debug overrides preserved.
 	if (loadBoolParamOrDefault (s0Param, false))
@@ -474,30 +487,80 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	if (reverseEnabled)
 	{
-		stagesSmoothed.setCurrentAndTargetValue ((float) targetStages);
-		freqSmoothed.setCurrentAndTargetValue (targetFreq);
-		shapeSmoothed.setCurrentAndTargetValue (targetShape);
+		const float smoothedStages = juce::jlimit (0.0f, (float) kAmountMax, stagesSmoothed.skip (numSamples));
+		const float smoothedFreq = freqSmoothed.skip (numSamples);
+		const float smoothedShape = juce::jlimit (0.0f, 1.0f, shapeSmoothed.skip (numSamples));
+		const int smoothedStageCount = juce::jlimit (kAmountMin, kAmountMax,
+			(int) std::lround (smoothedStages));
 
-		const float quantShape = std::round (targetShape * 100.0f) * 0.01f;
-		const float freqOct = std::log2 (juce::jmax (20.0f, targetFreq) / 20.0f);
+		const float quantShape = std::round (smoothedShape * 100.0f) * 0.01f;
+		const float freqOct = std::log2 (juce::jmax (20.0f, smoothedFreq) / 20.0f);
 		const float quantFreq = 20.0f * std::pow (2.0f, std::round (freqOct * 24.0f) / 24.0f);
+		const int candidateStages = smoothedStageCount;
+		const int candidateSeries = targetSeries;
+		const float candidateFreq = quantFreq;
+		const float candidateShape = quantShape;
 
-		const bool paramsChanged = (targetStages != lastRvsStages)
-			|| (targetSeries != lastRvsSeries)
-			|| (std::abs (quantFreq - lastRvsFreq) > 0.01f)
-			|| (std::abs (quantShape - lastRvsShape) > 0.0001f);
-
-		if (paramsChanged)
+		auto differsFrom = [] (int stagesA, int seriesA, float freqA, float shapeA,
+							   int stagesB, int seriesB, float freqB, float shapeB) noexcept
 		{
-			rvsRebuildPending = true;
-			pendingRvsStages = targetStages;
-			pendingRvsSeries = targetSeries;
-			pendingRvsFreq = quantFreq;
-			pendingRvsShape = quantShape;
+			return stagesA != stagesB
+				|| seriesA != seriesB
+				|| std::abs (freqA - freqB) > 0.01f
+				|| std::abs (shapeA - shapeB) > 0.0001f;
+		};
+
+		if (! rvsRebuildPending)
+		{
+			const bool differsFromLast = differsFrom (candidateStages,
+				candidateSeries,
+				candidateFreq,
+				candidateShape,
+				lastRvsStages,
+				lastRvsSeries,
+				lastRvsFreq,
+				lastRvsShape);
+
+			if (differsFromLast)
+			{
+				rvsRebuildPending = true;
+				pendingRvsStages = candidateStages;
+				pendingRvsSeries = candidateSeries;
+				pendingRvsFreq = candidateFreq;
+				pendingRvsShape = candidateShape;
+				rvsStableSamples = 0;
+			}
+		}
+		else
+		{
+			const bool differsFromPending = differsFrom (candidateStages,
+				candidateSeries,
+				candidateFreq,
+				candidateShape,
+				pendingRvsStages,
+				pendingRvsSeries,
+				pendingRvsFreq,
+				pendingRvsShape);
+
+			if (differsFromPending)
+			{
+				pendingRvsStages = candidateStages;
+				pendingRvsSeries = candidateSeries;
+				pendingRvsFreq = candidateFreq;
+				pendingRvsShape = candidateShape;
+				rvsStableSamples = 0;
+			}
+			else
+			{
+				rvsStableSamples += numSamples;
+			}
 		}
 
 		rvsRebuildCooldownSamples = juce::jmax (0, rvsRebuildCooldownSamples - numSamples);
-		if (rvsRebuildPending && rvsRebuildCooldownSamples <= 0)
+		const int settleSamples = (int) std::round ((currentSampleRate * kRvsSettleWindowMs) / 1000.0);
+		const bool allowInitialRebuild = (lastRvsStages < 0);
+		const bool settleReached = (rvsStableSamples >= settleSamples);
+		if (rvsRebuildPending && rvsRebuildCooldownSamples <= 0 && (allowInitialRebuild || settleReached))
 		{
 			rebuildRvsConvolutionIfNeeded (pendingRvsStages,
 				pendingRvsSeries,
@@ -505,6 +568,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				pendingRvsShape,
 				false);
 			rvsRebuildPending = false;
+			rvsStableSamples = 0;
 			rvsRebuildCooldownSamples = (int) std::round ((currentSampleRate * kRvsRebuildMinIntervalMs) / 1000.0);
 		}
 
@@ -654,8 +718,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 		juce::NormalisableRange<float> (20.0f, 20000.0f, 0.0f, 0.35f), kFreqDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
-		kParamResonance, "Resonance",
-		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kResonanceDefault));
+		kParamShape, "Shape",
+		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kShapeDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamReverse, "Reverse", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamInv, "Inv", false));

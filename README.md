@@ -2,6 +2,8 @@
 
 <img width="449" height="450" alt="image" src="https://github.com/user-attachments/assets/639141ef-16a7-46fd-bc56-98751541f616" />
 
+<br/><br/>
+
 
 DISP-TR is a phase-dispersion audio effect based on cascaded all-pass filters.  
 It reshapes transients and phase response without classic EQ-style magnitude boosts/cuts, creating tighter, softer, or more smeared attack behavior depending on settings.
@@ -40,5 +42,6 @@ It reshapes transients and phase response without classic EQ-style magnitude boo
 
 ## Notes
 
+- Parameter smoothing is implemented for `Stages`, `Frequency`, and `Shape` to improve transition behavior during control changes.
 - UI state (size and palette options) is persisted.
 - Some internal/debug parameters may exist in project state but are not part of the normal end-user workflow (UI Width & Height)
