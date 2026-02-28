@@ -38,4 +38,4 @@ It reshapes transients and phase response without classic EQ-style magnitude boo
 ## Notes
 
 - UI state (size and palette options) is persisted.
-- Some internal/debug parameters may exist in project state but are not part of the normal end-user workflow.
+- Some internal/debug parameters may exist in project state but are not part of the normal end-user workflow (UI Width & Height)
