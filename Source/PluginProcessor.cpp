@@ -349,8 +349,8 @@ int DisperserAudioProcessor::computeRvsIrLengthSamples (int stages, int series) 
 	const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
 	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
 	const int complexity = juce::jmax (1, nStages * nSeries);
-	const int len = 128 + (complexity * 4);
-	return juce::jlimit (128, 2048, len);
+	const int len = 192 + (complexity * 10);
+	return juce::jlimit (192, 4096, len);
 }
 
 void DisperserAudioProcessor::buildForwardImpulseResponse (std::vector<float>& ir,

@@ -775,7 +775,7 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawLinearSlider (juce::Graphics
     auto inner = r.reduced (pad);
 
     g.setColour (scheme.bg);
-    g.fillRect (inner);
+            g.drawText ("v1.0b", versionX, versionY, versionW, versionH,
 
     const float fillW = juce::jlimit (0.0f, inner.getWidth(), sliderPos - inner.getX());
     auto fill = inner.withWidth (fillW);
