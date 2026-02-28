@@ -775,7 +775,7 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawLinearSlider (juce::Graphics
     auto inner = r.reduced (pad);
 
     g.setColour (scheme.bg);
-            g.drawText ("v1.0b", versionX, versionY, versionW, versionH,
+        g.fillRect (inner);
 
     const float fillW = juce::jlimit (0.0f, inner.getWidth(), sliderPos - inner.getX());
     auto fill = inner.withWidth (fillW);
@@ -3193,7 +3193,7 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         const int versionW = juce::jmax (0, versionRight - versionX);
 
         if (versionW > 0)
-            g.drawText ("v1.0", versionX, versionY, versionW, versionH,
+            g.drawText ("v1.0b", versionX, versionY, versionW, versionH,
                 juce::Justification::bottomRight, false);
 
         g.setFont (juce::Font (juce::FontOptions (baseFontPx).withStyle ("Bold")));
