@@ -112,7 +112,7 @@ private:
 										 int stages,
 										 int series,
 										 float freqHz,
-										 float shapeNorm) const;
+										 float shapeNorm);
 	void rebuildRvsConvolutionIfNeeded (int stages, int series, float freqHz, float shapeNorm, bool forceRebuild);
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
@@ -132,6 +132,12 @@ private:
 
 	juce::dsp::Convolution rvsConvL { juce::dsp::Convolution::Latency { 1024 } };
 	juce::dsp::Convolution rvsConvR { juce::dsp::Convolution::Latency { 1024 } };
+	std::vector<float> rvsCoeffScratch;
+	std::vector<float> rvsForwardIrScratch;
+	std::vector<float> rvsReverseIrScratch;
+	std::array<std::vector<AllPassState>, kSeriesMax> rvsStateScratch;
+	juce::AudioBuffer<float> rvsIrBufferL;
+	juce::AudioBuffer<float> rvsIrBufferR;
 	bool rvsConvPrepared = false;
 	bool rvsRebuildPending = false;
 	int rvsRebuildCooldownSamples = 0;
