@@ -102,7 +102,23 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int)
 									 loadIntParamOrDefault (amountParam, kAmountDefault));
 	const int series = juce::jlimit (kSeriesMin, kSeriesMax,
 									 loadIntParamOrDefault (seriesParam, kSeriesDefault));
-	resizeDspState (stages, series);
+	const float freq = loadAtomicOrDefault (freqParam, kFreqDefault);
+	const float shape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
+
+	resizeDspState (kAmountMax, kSeriesMax);
+	activeStages = stages;
+	activeSeries = series;
+
+	stagesSmoothed.reset (currentSampleRate, kStageSmoothingSeconds);
+	stagesSmoothed.setCurrentAndTargetValue ((float) stages);
+	freqSmoothed.reset (currentSampleRate, kFreqSmoothingSeconds);
+	freqSmoothed.setCurrentAndTargetValue (freq);
+	shapeSmoothed.reset (currentSampleRate, kShapeSmoothingSeconds);
+	shapeSmoothed.setCurrentAndTargetValue (shape);
+
+	lastCoeffFreq = -1.0f;
+	lastCoeffShape = -1.0f;
+	lastCoeffStages = -1;
 }
 
 void DisperserAudioProcessor::releaseResources()
@@ -134,17 +150,16 @@ float DisperserAudioProcessor::calcAllPassCoeff (float frequency, float sampleRa
 
 void DisperserAudioProcessor::resizeDspState (int stages, int series)
 {
-	const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
-	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
+	juce::ignoreUnused (stages, series);
+	const int nStages = kAmountMax;
 
-	const size_t coeffSize = (size_t) juce::jmax (1, nStages);
+	const size_t coeffSize = (size_t) nStages;
 	if (stageCoeff.size() != coeffSize)
 		stageCoeff.assign (coeffSize, 0.0f);
 
 	for (int i = 0; i < kSeriesMax; ++i)
 	{
-		const int useStages = (i < nSeries) ? nStages : 0;
-		const size_t newSize = (size_t) useStages;
+		const size_t newSize = (size_t) nStages;
 		if (chainL[(size_t) i].size() != newSize)
 			chainL[(size_t) i].assign (newSize, {});
 		if (chainR[(size_t) i].size() != newSize)
@@ -152,11 +167,34 @@ void DisperserAudioProcessor::resizeDspState (int stages, int series)
 	}
 }
 
+void DisperserAudioProcessor::clearStageRange (int fromStageInclusive,
+													   int toStageExclusive,
+													   int seriesCount) noexcept
+{
+	const int fromStage = juce::jlimit (0, kAmountMax, fromStageInclusive);
+	const int toStage = juce::jlimit (0, kAmountMax, toStageExclusive);
+	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, seriesCount);
+
+	if (toStage <= fromStage)
+		return;
+
+	for (int s = 0; s < nSeries; ++s)
+	{
+		auto* left = chainL[(size_t) s].data();
+		auto* right = chainR[(size_t) s].data();
+		for (int st = fromStage; st < toStage; ++st)
+		{
+			left[st].z1 = 0.0f;
+			right[st].z1 = 0.0f;
+		}
+	}
+}
+
 void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm, int stages)
 {
 	const int nStages = juce::jmax (1, stages);
-	if ((int) stageCoeff.size() != nStages)
-		stageCoeff.assign ((size_t) nStages, 0.0f);
+	if ((int) stageCoeff.size() < nStages)
+		stageCoeff.assign ((size_t) kAmountMax, 0.0f);
 
 	const float sr = (float) currentSampleRate;
 	const float minFreq = 20.0f;
@@ -210,65 +248,112 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
 		buffer.clear (ch, 0, numSamples);
 
-	int stages = juce::jlimit (kAmountMin, kAmountMax, loadIntParamOrDefault (amountParam, kAmountDefault));
-	int series = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
-	float freq = loadAtomicOrDefault (freqParam, kFreqDefault);
-	float shape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
+	const int targetStages = juce::jlimit (kAmountMin, kAmountMax, loadIntParamOrDefault (amountParam, kAmountDefault));
+	const int targetSeries = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
+	const float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
+	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (resonanceParam, kResonanceDefault));
 
 	// Debug overrides preserved.
 	if (loadBoolParamOrDefault (s0Param, false))
-		shape = 0.0f;
+		targetShape = 0.0f;
 	if (loadBoolParamOrDefault (s100Param, false))
-		shape = 1.0f;
+		targetShape = 1.0f;
 
-	if (stages <= 0)
-	{
-		if (loadBoolParamOrDefault (invParam, false))
-			buffer.applyGain (-1.0f);
-		return;
-	}
+	stagesSmoothed.setTargetValue ((float) targetStages);
+	freqSmoothed.setTargetValue (targetFreq);
+	shapeSmoothed.setTargetValue (targetShape);
 
-	resizeDspState (stages, series);
-	updateCoefficients (freq, shape, stages);
+	if (targetSeries > activeSeries)
+		clearStageRange (0, kAmountMax, targetSeries);
+	activeSeries = targetSeries;
+	const bool invEnabled = loadBoolParamOrDefault (invParam, false);
 
 	auto* ch0 = buffer.getWritePointer (0);
 	float* ch1 = (numChannels > 1) ? buffer.getWritePointer (1) : nullptr;
+	const bool hasStereo = (ch1 != nullptr);
 
 	for (int n = 0; n < numSamples; ++n)
 	{
-		float xL = ch0[n];
-		float xR = (ch1 != nullptr) ? ch1[n] : xL;
+		const float smoothedStages = juce::jlimit (0.0f, (float) kAmountMax, stagesSmoothed.getNextValue());
+		const float smoothedFreq = freqSmoothed.getNextValue();
+		const float smoothedShape = shapeSmoothed.getNextValue();
 
-		for (int s = 0; s < series; ++s)
+		const int baseStages = juce::jlimit (0, kAmountMax, (int) std::floor (smoothedStages));
+		const float stageFrac = juce::jlimit (0.0f, 1.0f, smoothedStages - (float) baseStages);
+		const bool useFractionalStage = (stageFrac > 0.0001f && baseStages < kAmountMax);
+		const int coeffStages = juce::jlimit (0, kAmountMax, baseStages + (useFractionalStage ? 1 : 0));
+
+		if (coeffStages > activeStages)
+			clearStageRange (activeStages, coeffStages, activeSeries);
+		activeStages = coeffStages;
+
+		if (coeffStages > 0)
 		{
-			auto& lStages = chainL[(size_t) s];
-			auto& rStages = chainR[(size_t) s];
-
-			for (int st = 0; st < stages; ++st)
+			if (lastCoeffStages != coeffStages
+				|| std::abs (smoothedFreq - lastCoeffFreq) > 0.001f
+				|| std::abs (smoothedShape - lastCoeffShape) > 0.0002f)
 			{
-				const float a = stageCoeff[(size_t) st];
+				updateCoefficients (smoothedFreq, smoothedShape, coeffStages);
+				lastCoeffStages = coeffStages;
+				lastCoeffFreq = smoothedFreq;
+				lastCoeffShape = smoothedShape;
+			}
 
-				auto& sl = lStages[(size_t) st];
-				const float yL = (-a * xL) + sl.z1;
-				sl.z1 = xL + (a * yL);
-				xL = yL;
+			float xL = ch0[n];
+			float xR = hasStereo ? ch1[n] : xL;
 
-				if (ch1 != nullptr)
+			for (int s = 0; s < activeSeries; ++s)
+			{
+				auto* lStages = chainL[(size_t) s].data();
+				auto* rStages = chainR[(size_t) s].data();
+
+				for (int st = 0; st < baseStages; ++st)
 				{
-					auto& sr = rStages[(size_t) st];
-					const float yR = (-a * xR) + sr.z1;
-					sr.z1 = xR + (a * yR);
-					xR = yR;
+					const float a = stageCoeff[(size_t) st];
+
+					auto& sl = lStages[st];
+					const float yL = (-a * xL) + sl.z1;
+					sl.z1 = xL + (a * yL);
+					xL = yL;
+
+					if (hasStereo)
+					{
+						auto& sr = rStages[st];
+						const float yR = (-a * xR) + sr.z1;
+						sr.z1 = xR + (a * yR);
+						xR = yR;
+					}
+				}
+
+				if (useFractionalStage)
+				{
+					const int st = baseStages;
+					const float a = stageCoeff[(size_t) st];
+
+					const float inL = xL;
+					auto& sl = lStages[st];
+					const float yL = (-a * inL) + sl.z1;
+					sl.z1 = inL + (a * yL);
+					xL = inL + (stageFrac * (yL - inL));
+
+					if (hasStereo)
+					{
+						const float inR = xR;
+						auto& sr = rStages[st];
+						const float yR = (-a * inR) + sr.z1;
+						sr.z1 = inR + (a * yR);
+						xR = inR + (stageFrac * (yR - inR));
+					}
 				}
 			}
-		}
 
-		ch0[n] = xL;
-		if (ch1 != nullptr)
-			ch1[n] = xR;
+			ch0[n] = xL;
+			if (hasStereo)
+				ch1[n] = xR;
+		}
 	}
 
-	if (loadBoolParamOrDefault (invParam, false))
+	if (invEnabled)
 		buffer.applyGain (-1.0f);
 
 	juce::ignoreUnused (reverseParam); // RVS se implementará después.

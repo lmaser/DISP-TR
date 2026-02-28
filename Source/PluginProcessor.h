@@ -29,7 +29,7 @@ public:
 	static constexpr const char* kParamUiColor3  = "ui_color3";
 
 	static constexpr int kAmountMin = 0;
-	static constexpr int kAmountMax = 100;
+	static constexpr int kAmountMax = 128;
 	static constexpr int kAmountDefault = 32;
 
 	static constexpr int kSeriesMin = 1;
@@ -105,10 +105,22 @@ private:
 	static float calcAllPassCoeff (float frequency, float sampleRate) noexcept;
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
+	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
 	std::vector<float> stageCoeff;
+	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> stagesSmoothed;
+	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> freqSmoothed;
+	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> shapeSmoothed;
+	static constexpr double kStageSmoothingSeconds = 2.0;
+	static constexpr double kFreqSmoothingSeconds = 1.0;
+	static constexpr double kShapeSmoothingSeconds = 0.1;
+	int activeStages = 0;
+	int activeSeries = kSeriesDefault;
+	float lastCoeffFreq = -1.0f;
+	float lastCoeffShape = -1.0f;
+	int lastCoeffStages = -1;
 
 	double currentSampleRate = 44100.0;
 
