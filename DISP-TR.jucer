@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<JUCERPROJECT id="c3w4VA" name="DISP-TR" projectType="audioplug" companyName="NMSTR" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
+<JUCERPROJECT id="c3w4VA" name="DISP-TR" projectType="audioplug" companyName="NMSTR"
+              useAppConfig="0" addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
   <MAINGROUP id="SbpRKo" name="DISP-TR">
     <GROUP id="{9D9178EF-899B-8B1D-C9BE-1A216E41D20A}" name="Source">
       <FILE id="kVE5kY" name="PluginProcessor.cpp" compile="1" resource="0"
@@ -23,6 +23,7 @@
     <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
@@ -48,6 +49,7 @@
         <MODULEPATH id="juce_graphics" path="C:/Program Files/JUCE/modules"/>
         <MODULEPATH id="juce_gui_basics" path="C:/Program Files/JUCE/modules"/>
         <MODULEPATH id="juce_gui_extra" path="C:/Program Files/JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="C:/Program Files/JUCE/modules"/>
       </MODULEPATHS>
     </VS2022>
   </EXPORTFORMATS>
