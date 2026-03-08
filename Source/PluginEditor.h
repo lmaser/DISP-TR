@@ -30,6 +30,7 @@ private:
     void openNumericEntryPopupForSlider (juce::Slider& s);
     void openInfoPopup();
     void openGraphicsPopup();
+    void openRvsDecayPrompt();
     void setPromptOverlayActive (bool shouldBeActive);
 
     DisperserAudioProcessor& audioProcessor;
@@ -93,6 +94,7 @@ private:
 
     juce::ToggleButton rvsButton;
     juce::ToggleButton invButton;
+    juce::Label rvsDisplay;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;

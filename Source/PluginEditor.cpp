@@ -36,7 +36,12 @@ static constexpr std::array<const char*, 4> kUiMirrorParamIds {
 static juce::String formatBarFrequencyHzText (double hz)
 {
     const double safeHz = juce::jmax (0.0, hz);
-    return juce::String (safeHz, 3).toUpperCase() + " HZ";
+    return juce::String (safeHz, 3) + " Hz";
+}
+
+static juce::String formatDecayTooltip (float decay01)
+{
+    return juce::String (juce::roundToInt (decay01 * 100.0f)) + "% DECAY";
 }
 
 //========================== LookAndFeel ==========================
@@ -326,6 +331,20 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     addAndMakeVisible (rvsButton);
     addAndMakeVisible (invButton);
+
+    // RVS decay tooltip overlay — invisible label positioned over the RVS legend.
+    // Provides tooltip on hover; clicks forwarded to editor via addMouseListener.
+    {
+        const float savedDecay = audioProcessor.apvts.getRawParameterValue (DisperserAudioProcessor::kParamRvsDecay)->load();
+        rvsDisplay.setText ("", juce::dontSendNotification);
+        rvsDisplay.setInterceptsMouseClicks (true, false);
+        rvsDisplay.addMouseListener (this, false);
+        rvsDisplay.setTooltip (formatDecayTooltip (savedDecay));
+        rvsDisplay.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+        rvsDisplay.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+        rvsDisplay.setOpaque (false);
+        addAndMakeVisible (rvsDisplay);
+    }
 
     auto bindSlider = [&] (std::unique_ptr<SliderAttachment>& attachment,
                            const char* paramId,
@@ -645,7 +664,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
 
     cachedFreqTextHz = formatBarFrequencyHzText (hz);
     cachedFreqIntOnly = cachedFreqTextHz.upToFirstOccurrenceOf (".", false, false)
-                                     .upToFirstOccurrenceOf (" HZ", false, false);
+                                     .upToFirstOccurrenceOf (" Hz", false, false);
 
     cachedShapeTextFull = juce::String (shapePct).toUpperCase() + "% SHAPE";
     cachedShapeTextShort = juce::String (shapePct).toUpperCase() + "% SHP";
@@ -1097,7 +1116,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
 
     if (&s == &amountSlider)       { suffix = " STAGES";  suffixShort = " STG"; }
     else if (&s == &seriesSlider)  { suffix = " SERIES";  suffixShort = " SRS"; }
-    else if (&s == &freqSlider)    { suffix = " HZ";      suffixShort = " HZ"; }
+    else if (&s == &freqSlider)    { suffix = " Hz";      suffixShort = " Hz"; }
     else if (&s == &shapeSlider)   { suffix = " % SHAPE"; suffixShort = " %"; }
 
     const juce::String suffixText = suffix.trimStart();
@@ -1385,6 +1404,191 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             }
 
             sliderPtr->setValue (clamped, juce::sendNotificationSync);
+        }));
+}
+
+// ── RVS Decay Prompt ─────────────────────────────────────────────
+void DisperserAudioProcessorEditor::openRvsDecayPrompt()
+{
+    lnf.setScheme (activeScheme);
+    const auto scheme = activeScheme;
+
+    const float currentDecay = juce::jlimit (0.0f, 1.0f,
+        audioProcessor.apvts.getRawParameterValue (DisperserAudioProcessor::kParamRvsDecay)->load());
+    const int currentPercent = juce::roundToInt (currentDecay * 100.0f);
+
+    auto* aw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
+    aw->setLookAndFeel (&lnf);
+
+    aw->addTextEditor ("val", juce::String (currentPercent), juce::String());
+
+    juce::Label* suffixLabel = nullptr;
+    juce::Rectangle<int> editorBaseBounds;
+    std::function<void()> layoutValueAndSuffix;
+
+    if (auto* te = aw->getTextEditor ("val"))
+    {
+        const auto& f = kBoldFont40();
+        te->setFont (f);
+        te->applyFontToAllText (f);
+
+        auto r = te->getBounds();
+        r.setHeight ((int) (f.getHeight() * kPromptEditorHeightScale) + kPromptEditorHeightPadPx);
+        r.setY (juce::jmax (kPromptEditorMinTopPx, r.getY() - kPromptEditorRaiseYPx));
+        editorBaseBounds = r;
+
+        suffixLabel = new juce::Label ("suffix", "% DECAY");
+        suffixLabel->setComponentID (kPromptSuffixLabelId);
+        suffixLabel->setJustificationType (juce::Justification::centredLeft);
+        applyLabelTextColour (*suffixLabel, scheme.text);
+        suffixLabel->setBorderSize (juce::BorderSize<int> (0));
+        suffixLabel->setFont (f);
+        aw->addAndMakeVisible (suffixLabel);
+
+        const int maxInputTextW = juce::jmax (1, stringWidth (f, "100"));
+        const juce::String suffixText = "% DECAY";
+
+        layoutValueAndSuffix = [aw, te, suffixLabel, editorBaseBounds, maxInputTextW, suffixText]()
+        {
+            const int contentPad = kPromptInlineContentPadPx;
+            const int contentLeft = contentPad;
+            const int contentRight = (aw != nullptr ? aw->getWidth() - contentPad : editorBaseBounds.getRight());
+            const int contentCenter = (contentLeft + contentRight) / 2;
+
+            const int labelW = stringWidth (suffixLabel->getFont(), suffixText) + 2;
+            const int spaceW = 0;  // stick % to value
+            const auto txt = te->getText();
+            const int textW = juce::jmax (1, stringWidth (te->getFont(), txt));
+
+            constexpr int kEditorTextPadPx = 12;
+            constexpr int kMinEditorWidthPx = 24;
+            auto er = te->getBounds();
+            const int editorW = juce::jlimit (kMinEditorWidthPx,
+                                              editorBaseBounds.getWidth(),
+                                              textW + (kEditorTextPadPx * 2));
+            er.setWidth (editorW);
+
+            const int combinedW = textW + spaceW + labelW;
+            int blockLeft = contentCenter - (combinedW / 2);
+            blockLeft = juce::jlimit (contentLeft,
+                                      juce::jmax (contentLeft, contentRight - combinedW),
+                                      blockLeft);
+
+            int teX = blockLeft - ((editorW - textW) / 2);
+            teX = juce::jlimit (contentLeft,
+                                juce::jmax (contentLeft, contentRight - editorW),
+                                teX);
+            er.setX (teX);
+            te->setBounds (er);
+
+            const int textLeftActual = er.getX() + (er.getWidth() - textW) / 2;
+            int labelX = textLeftActual + textW + spaceW;
+            labelX = juce::jlimit (contentLeft,
+                                   juce::jmax (contentLeft, contentRight - labelW),
+                                   labelX);
+            suffixLabel->setBounds (labelX, er.getY(), labelW, juce::jmax (1, er.getHeight()));
+        };
+
+        te->setBounds (editorBaseBounds);
+        int labelW0 = stringWidth (suffixLabel->getFont(), suffixText) + 2;
+        suffixLabel->setBounds (r.getRight() + 2, r.getY() + 1, labelW0, juce::jmax (1, r.getHeight() - 2));
+
+        if (layoutValueAndSuffix)
+            layoutValueAndSuffix();
+
+        te->setInputFilter (new NumericInputFilter (0.0, 100.0, 3, 0), true);
+
+        te->onTextChange = [te, layoutValueAndSuffix]() mutable
+        {
+            if (layoutValueAndSuffix)
+                layoutValueAndSuffix();
+        };
+    }
+
+    aw->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    aw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    applyPromptShellSize (*aw);
+    layoutAlertWindowButtons (*aw);
+
+    const juce::Font& kPromptFont = kBoldFont40();
+
+    preparePromptTextEditor (*aw, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+
+    if (suffixLabel != nullptr && ! editorBaseBounds.isEmpty())
+    {
+        if (auto* te = aw->getTextEditor ("val"))
+            suffixLabel->setFont (te->getFont());
+        if (layoutValueAndSuffix)
+            layoutValueAndSuffix();
+    }
+
+    styleAlertButtons (*aw, lnf);
+
+    juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThis (this);
+
+    setPromptOverlayActive (true);
+    aw->setLookAndFeel (&lnf);
+
+    if (safeThis != nullptr)
+    {
+        fitAlertWindowToEditor (*aw, safeThis.getComponent(), [&] (juce::AlertWindow& a)
+        {
+            if (layoutValueAndSuffix)
+                layoutValueAndSuffix();
+            layoutAlertWindowButtons (a);
+            preparePromptTextEditor (a, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+        });
+
+        embedAlertWindowInOverlay (safeThis.getComponent(), aw);
+    }
+    else
+    {
+        aw->centreAroundComponent (this, aw->getWidth(), aw->getHeight());
+        bringPromptWindowToFront (*aw);
+        aw->repaint();
+    }
+
+    {
+        preparePromptTextEditor (*aw, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+        if (auto* suffixLbl = dynamic_cast<juce::Label*> (aw->findChildWithID (kPromptSuffixLabelId)))
+        {
+            if (auto* te = aw->getTextEditor ("val"))
+                suffixLbl->setFont (te->getFont());
+        }
+
+        if (layoutValueAndSuffix)
+            layoutValueAndSuffix();
+
+        juce::Component::SafePointer<juce::AlertWindow> safeAw (aw);
+        juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThisPtr (this);
+        juce::MessageManager::callAsync ([safeAw, safeThisPtr]()
+        {
+            if (safeAw == nullptr)
+                return;
+            bringPromptWindowToFront (*safeAw);
+            safeAw->repaint();
+        });
+    }
+
+    aw->enterModalState (true,
+        juce::ModalCallbackFunction::create ([safeThis, aw] (int result) mutable
+        {
+            std::unique_ptr<juce::AlertWindow> killer (aw);
+
+            if (safeThis != nullptr)
+                safeThis->setPromptOverlayActive (false);
+
+            if (safeThis == nullptr || result != 1)
+                return;
+
+            const auto txt = aw->getTextEditorContents ("val").trim();
+            const double v = juce::jlimit (0.0, 100.0, txt.getDoubleValue());
+            const float normalised = (float) v * 0.01f;
+
+            if (auto* param = safeThis->audioProcessor.apvts.getParameter (DisperserAudioProcessor::kParamRvsDecay))
+                param->setValueNotifyingHost (param->convertTo0to1 (normalised));
+
+            safeThis->rvsDisplay.setTooltip (formatDecayTooltip (normalised));
         }));
 }
 
@@ -1885,9 +2089,9 @@ juce::String DisperserAudioProcessorEditor::getFreqText() const
     const double hz = freqSlider.getValue();
 
     if (hz >= kHzSwitchHz)
-        return juce::String (hz / 1000.0, 2).toUpperCase() + " KHZ";
+        return juce::String (hz / 1000.0, 2) + " kHz";
 
-    return juce::String (hz, 2).toUpperCase() + " HZ";
+    return juce::String (hz, 2) + " Hz";
 }
 
 juce::String DisperserAudioProcessorEditor::getShapeText() const
@@ -2146,7 +2350,7 @@ juce::Rectangle<int> DisperserAudioProcessorEditor::getInfoIconArea() const
 void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     lastUserInteractionMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
-    const auto p = e.getPosition();
+    const auto p = e.getEventRelativeTo (this).getPosition();
 
     if (e.mods.isPopupMenu())
     {
@@ -2163,9 +2367,12 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    if (getRvsLabelArea().contains (p))
+    if (getRvsLabelArea().contains (p) || rvsDisplay.getBounds().contains (p))
     {
-        rvsButton.setToggleState (! rvsButton.getToggleState(), juce::sendNotificationSync);
+        if (e.mods.isPopupMenu())
+            openRvsDecayPrompt();
+        else
+            rvsButton.setToggleState (! rvsButton.getToggleState(), juce::sendNotificationSync);
         return;
     }
 
@@ -2473,6 +2680,9 @@ void DisperserAudioProcessorEditor::resized()
 
     rvsButton.setBounds (rvsBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
     invButton.setBounds (invBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
+
+    // Position invisible tooltip overlay on the RVS label area
+    rvsDisplay.setBounds (getRvsLabelArea());
 
     if (resizerCorner != nullptr)
         resizerCorner->setBounds (W - kResizerCornerPx, H - kResizerCornerPx, kResizerCornerPx, kResizerCornerPx);

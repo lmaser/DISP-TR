@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <vector>
+#include "DspDebugLog.h"
 
 class DisperserAudioProcessor : public juce::AudioProcessor
 {
@@ -19,6 +20,7 @@ public:
 	static constexpr const char* kParamInv       = "inv";
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
+	static constexpr const char* kParamRvsDecay  = "rvs_decay";
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -38,6 +40,7 @@ public:
 
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
+	static constexpr float kRvsDecayDefault = 0.5f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -106,14 +109,7 @@ private:
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
 	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
-	int computeRvsIrLengthSamples (int stages, int series) const noexcept;
-	void buildForwardImpulseResponse (std::vector<float>& ir,
-										 int irLength,
-										 int stages,
-										 int series,
-										 float freqHz,
-										 float shapeNorm);
-	void rebuildRvsConvolutionIfNeeded (int stages, int series, float freqHz, float shapeNorm, bool forceRebuild);
+	int computeRvsIrLengthSamples (int stages, int series, float decay) const noexcept;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
@@ -121,23 +117,67 @@ private:
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> stagesSmoothed;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> freqSmoothed;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> shapeSmoothed;
-	static constexpr double kStageSmoothingSeconds = 2.0;
-	static constexpr double kFreqSmoothingSeconds = 1.0;
-	static constexpr double kShapeSmoothingSeconds = 0.1;
+	static constexpr double kStageSmoothingSeconds = 0.06;
+	static constexpr double kFreqSmoothingSeconds = 0.08;
+	static constexpr double kShapeSmoothingSeconds = 0.05;
+	static constexpr int kCoeffUpdateInterval = 32;
+	static constexpr double kSeriesCrossfadeMs = 20.0;
 	int activeStages = 0;
 	int activeSeries = kSeriesDefault;
 	float lastCoeffFreq = -1.0f;
 	float lastCoeffShape = -1.0f;
 	int lastCoeffStages = -1;
+	int coeffUpdateCountdown = 0;
+
+	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainL;
+	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainR;
+	int seriesXfadeSamplesRemaining = 0;
+	int seriesXfadeTotalSamples = 0;
+	int previousSeries = kSeriesDefault;
+
+	// ── Background thread for non-blocking IR rebuild ──
+	class RvsRebuildThread : public juce::Thread
+	{
+	public:
+		explicit RvsRebuildThread (DisperserAudioProcessor& owner)
+			: juce::Thread ("DISP-TR RVS Rebuild"), proc (owner) {}
+
+		void requestRebuild (int stages, int series, float freq, float shape, float decay) noexcept
+		{
+			reqStages.store (stages, std::memory_order_relaxed);
+			reqSeries.store (series, std::memory_order_relaxed);
+			reqFreq  .store (freq,   std::memory_order_relaxed);
+			reqShape .store (shape,  std::memory_order_relaxed);
+			reqDecay .store (decay,  std::memory_order_relaxed);
+			pending  .store (true,   std::memory_order_release);
+			notify();
+		}
+
+		bool isBusy() const noexcept { return busy.load (std::memory_order_acquire); }
+
+		void run() override;  // implemented in PluginProcessor.cpp
+
+	private:
+		DisperserAudioProcessor& proc;
+		std::atomic<int>   reqStages { 0 };
+		std::atomic<int>   reqSeries { 1 };
+		std::atomic<float> reqFreq   { 1000.0f };
+		std::atomic<float> reqShape  { 0.0f };
+		std::atomic<float> reqDecay  { 0.5f };
+		std::atomic<bool>  pending   { false };
+		std::atomic<bool>  busy      { false };
+
+		// Own scratch buffers (not shared with audio thread)
+		std::vector<float> coeffScratch;
+		std::array<std::vector<AllPassState>, kSeriesMax> stateScratch;
+		std::vector<float> fwdIrScratch;
+		std::vector<float> revIrScratch;
+	};
+
+	std::unique_ptr<RvsRebuildThread> rvsRebuildThread;
 
 	juce::dsp::Convolution rvsConvL { juce::dsp::Convolution::Latency { 1024 } };
 	juce::dsp::Convolution rvsConvR { juce::dsp::Convolution::Latency { 1024 } };
-	std::vector<float> rvsCoeffScratch;
-	std::vector<float> rvsForwardIrScratch;
-	std::vector<float> rvsReverseIrScratch;
-	std::array<std::vector<AllPassState>, kSeriesMax> rvsStateScratch;
-	juce::AudioBuffer<float> rvsIrBufferL;
-	juce::AudioBuffer<float> rvsIrBufferR;
 	bool rvsConvPrepared = false;
 	bool rvsRebuildPending = false;
 	int rvsRebuildCooldownSamples = 0;
@@ -146,10 +186,12 @@ private:
 	int pendingRvsSeries = -1;
 	float pendingRvsFreq = -1.0f;
 	float pendingRvsShape = -1.0f;
+	float pendingRvsDecay = -1.0f;
 	int lastRvsStages = -1;
 	int lastRvsSeries = -1;
 	float lastRvsFreq = -1.0f;
 	float lastRvsShape = -1.0f;
+	float lastRvsDecay = -1.0f;
 	int lastRvsIrLength = -1;
 	static constexpr int kRvsRebuildMinIntervalMs = 200;
 	static constexpr int kRvsSettleWindowMs = 120;
@@ -164,6 +206,7 @@ private:
 	std::atomic<float>* invParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
+	std::atomic<float>* rvsDecayParam = nullptr;
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;
@@ -180,6 +223,8 @@ private:
 		std::atomic<juce::uint32> { juce::Colours::white.getARGB() },
 		std::atomic<juce::uint32> { juce::Colours::black.getARGB() }
 	};
+
+	DspDebugLog dspLog;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisperserAudioProcessor)
 };
