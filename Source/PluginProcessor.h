@@ -173,7 +173,7 @@ private:
 	std::atomic<int> uiEditorWidth { 360 };
 	std::atomic<int> uiEditorHeight { 360 };
 	std::atomic<int> uiUseCustomPalette { 0 };
-	std::atomic<int> uiFxTailEnabled { 1 };
+	std::atomic<int> uiFxTailEnabled { 0 };
 	std::array<std::atomic<juce::uint32>, 4> uiCustomPalette {
 		std::atomic<juce::uint32> { juce::Colours::white.getARGB() },
 		std::atomic<juce::uint32> { juce::Colours::black.getARGB() },

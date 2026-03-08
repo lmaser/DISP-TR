@@ -11,6 +11,10 @@
       <FILE id="Gm6Q8q" name="PluginEditor.cpp" compile="1" resource="0"
             file="Source/PluginEditor.cpp"/>
       <FILE id="pqXXVO" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="TRsUI01" name="TRSharedUI.h" compile="0" resource="0" file="Source/TRSharedUI.h"/>
+      <FILE id="CrtFx01" name="CrtEffect.h" compile="0" resource="0" file="Source/CrtEffect.h"/>
+      <FILE id="InfoCt01" name="InfoContent.h" compile="0" resource="0" file="Source/InfoContent.h"/>
+      <FILE id="PerfTr01" name="PerfTrace.h" compile="0" resource="0" file="Source/PerfTrace.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>

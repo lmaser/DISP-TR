@@ -4,6 +4,8 @@
 #include <atomic>
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "CrtEffect.h"
+#include "TRSharedUI.h"
 
 class DisperserAudioProcessorEditor  : public juce::AudioProcessorEditor,
                                        private juce::Slider::Listener,
@@ -15,11 +17,11 @@ public:
     ~DisperserAudioProcessorEditor() override;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
     void moved() override;
-    void updateLegendVisibility();
+    void parentHierarchyChanged() override;
 
-public:
 private:
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
@@ -106,48 +108,47 @@ private:
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
 
-    struct DISPXScheme
+    using DISPScheme = TR::TRScheme;
+
+    DISPScheme activeScheme;
+
+    struct HorizontalLayoutMetrics
     {
-        juce::Colour bg;
-        juce::Colour fg;
-        juce::Colour outline;
-        juce::Colour text;
-        juce::Colour fxGradientStart;
-        juce::Colour fxGradientEnd;
+        int barW = 0;
+        int valuePad = 0;
+        int valueW = 0;
+        int contentW = 0;
+        int leftX = 0;
     };
 
-    std::array<DISPXScheme, 4> schemes;
-    int currentSchemeIndex = 0;
+    struct VerticalLayoutMetrics
+    {
+        int rhythm = 0;
+        int titleH = 0;
+        int titleAreaH = 0;
+        int titleTopPad = 0;
+        int topMargin = 0;
+        int betweenSlidersAndButtons = 0;
+        int bottomMargin = 0;
+        int box = 0;
+        int btnY = 0;
+        int availableForSliders = 0;
+        int barH = 0;
+        int gapY = 0;
+        int topY = 0;
+    };
+
+    static HorizontalLayoutMetrics buildHorizontalLayout (int editorW, int valueColW);
+    static VerticalLayoutMetrics buildVerticalLayout (int editorH, int biasY);
+    void updateCachedLayout();
 
     class MinimalLNF : public juce::LookAndFeel_V4
     {
     public:
-           void setScheme (const DISPXScheme& s)
-    {
-        scheme = s;
-
-        setColour (juce::TooltipWindow::backgroundColourId, scheme.bg);
-        setColour (juce::TooltipWindow::textColourId,       scheme.text);
-        setColour (juce::TooltipWindow::outlineColourId,    scheme.outline);
-
-        setColour (juce::BubbleComponent::backgroundColourId, scheme.bg);
-        setColour (juce::BubbleComponent::outlineColourId,    scheme.outline);
-
-        setColour (juce::AlertWindow::backgroundColourId, scheme.bg);
-        setColour (juce::AlertWindow::textColourId,       scheme.text);
-        setColour (juce::AlertWindow::outlineColourId,    scheme.outline);
-
-        setColour (juce::TextButton::buttonColourId,   scheme.bg);
-        setColour (juce::TextButton::buttonOnColourId, scheme.fg);
-        setColour (juce::TextButton::textColourOffId,  scheme.text);
-        setColour (juce::TextButton::textColourOnId,   scheme.bg);
-
-        trailingTextGradient = { scheme.fxGradientStart, scheme.fxGradientEnd };
-    }
-
-        const std::array<juce::Colour, 2>& getTrailingTextGradient() const noexcept
+        void setScheme (const DISPScheme& s)
         {
-            return trailingTextGradient;
+            scheme = s;
+            TR::applySchemeToLookAndFeel (*this, scheme);
         }
 
         void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -185,26 +186,25 @@ private:
                                juce::Rectangle<int> parentArea) override;
         void drawTooltip (juce::Graphics&, const juce::String& text, int width, int height) override;
 
+        void drawScrollbar (juce::Graphics&, juce::ScrollBar&,
+                            int x, int y, int width, int height,
+                            bool isScrollbarVertical,
+                            int thumbStartPosition, int thumbSize,
+                            bool isMouseOver, bool isMouseDown) override;
+
+        int getMinimumScrollbarThumbSize (juce::ScrollBar&) override { return 16; }
+        int getScrollbarButtonSize (juce::ScrollBar&) override      { return 0; }
+
     private:
-        DISPXScheme scheme {
+        DISPScheme scheme {
             juce::Colours::black,
             juce::Colours::white,
             juce::Colours::white,
-            juce::Colours::white,
-            juce::Colours::white,
-            juce::Colours::black
+            juce::Colours::white
         };
-        std::array<juce::Colour, 2> trailingTextGradient { juce::Colours::white, juce::Colours::black };
     };
 
-    class PromptOverlay : public juce::Component
-    {
-    public:
-        void paint (juce::Graphics& g) override
-        {
-            g.fillAll (juce::Colours::black.withAlpha (0.5f));
-        }
-    };
+    using PromptOverlay = TR::PromptOverlay;
 
     MinimalLNF lnf;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow;
@@ -231,10 +231,8 @@ private:
     void applyPersistedUiStateFromProcessor (bool applySize, bool applyPaletteAndFx);
     void applyLabelTextColour (juce::Label& label, juce::Colour colour);
 
-    // Friend: allow helper in PluginEditor.cpp to embed prompts in the overlay.
-    friend void embedAlertWindowInOverlay (DisperserAudioProcessorEditor* editor,
-                                           juce::AlertWindow* aw,
-                                           bool bringTooltip);
+    template <typename T>
+    friend void TR::embedAlertWindowInOverlay (T*, juce::AlertWindow*, bool);
 
     juce::Rectangle<int> getValueAreaFor (const juce::Rectangle<int>& barBounds) const;
     juce::Slider* getSliderForValueAreaPoint (juce::Point<int> p);
@@ -245,6 +243,7 @@ private:
     bool refreshLegendTextCache();
     juce::Rectangle<int> getRowRepaintBounds (const juce::Slider& s) const;
     void applyActivePalette();
+    void applyCrtState (bool enabled);
 
     juce::Path cachedInfoGearPath;
     juce::Rectangle<float> cachedInfoGearHole;
@@ -260,38 +259,42 @@ private:
     mutable std::uint64_t cachedValueColumnWidthKey = 0;
     mutable int cachedValueColumnWidth = 90;
 
+    HorizontalLayoutMetrics cachedHLayout_;
+    VerticalLayoutMetrics cachedVLayout_;
+    std::array<juce::Rectangle<int>, 4> cachedValueAreas_;
+
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
     static constexpr double kDefaultFreq   = (double) DisperserAudioProcessor::kFreqDefault;
     static constexpr double kDefaultShape  = (double) DisperserAudioProcessor::kShapeDefault;
 
     static constexpr int kMinW = 360;
-    static constexpr int kMinH = 360;
+    static constexpr int kMinH = 540;
     static constexpr int kMaxW = 800;
-    static constexpr int kMaxH = 600;
+    static constexpr int kMaxH = 540;
 
     static constexpr int kLayoutVerticalBiasPx = 10;
 
     static constexpr double kHzSwitchHz = 999.5;
 
-    int labelVisibilityMode = 0;
     bool promptOverlayActive = false;
     bool suppressSizePersistence = false;
     int lastPersistedEditorW = -1;
     int lastPersistedEditorH = -1;
     std::atomic<uint32_t> lastUserInteractionMs { 0 };
     static constexpr uint32_t kUserInteractionPersistWindowMs = 5000;
-    bool fxTailEnabled = true;
+    bool crtEnabled = false;
     bool useCustomPalette = false;
-    std::array<juce::Colour, 4> defaultPalette {
-        juce::Colours::white,
-        juce::Colours::black,
+
+    // CRT post-process effect
+    CrtEffect crtEffect;
+    float     crtTime = 0.0f;
+
+    std::array<juce::Colour, 2> defaultPalette {
         juce::Colours::white,
         juce::Colours::black
     };
-    std::array<juce::Colour, 4> customPalette {
-        juce::Colours::white,
-        juce::Colours::black,
+    std::array<juce::Colour, 2> customPalette {
         juce::Colours::white,
         juce::Colours::black
     };

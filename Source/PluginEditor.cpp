@@ -1,762 +1,42 @@
 // PluginEditor.cpp
 #include "PluginEditor.h"
+#include "InfoContent.h"
 #include <functional>
-#include <unordered_map>
-#include <fstream>
 
-//========================== Overflow helpers ==========================
-// Helpers para medir texto y aplicar truncados según prioridad de formatos.
+using namespace TR;
 
-static std::unordered_map<std::string, int>& getStringWidthCache()
-{
-    static thread_local std::unordered_map<std::string, int> widthCache;
-    return widthCache;
-}
-
-static int stringWidth (const juce::Font& font, const juce::String& s)
-{
-    auto& widthCache = getStringWidthCache();
-
-    if (s.isEmpty())
-        return 0;
-
-    if (widthCache.size() > 2048)
-        widthCache.clear();
-
-    const int h100 = (int) std::round (font.getHeight() * 100.0f);
-    std::string key;
-    key.reserve (32 + (size_t) s.length());
-    key += std::to_string (h100);
-    key += "|";
-    key += font.getTypefaceName().toStdString();
-    key += font.isBold() ? "|b1" : "|b0";
-    key += font.isItalic() ? "|i1" : "|i0";
-    key += "|";
-    key += s.toStdString();
-
-    if (const auto it = widthCache.find (key); it != widthCache.end())
-        return it->second;
-
-    juce::GlyphArrangement ga;
-    ga.addLineOfText (font, s, 0.0f, 0.0f);
-    const int width = (int) std::ceil (ga.getBoundingBox (0, -1, true).getWidth());
-    widthCache.emplace (std::move (key), width);
-    return width;
-}
-
-struct GraphicsPromptLayout
-{
-    static constexpr int toggleBox = 34;
-    static constexpr int toggleGap = 10;
-    static constexpr int swatchSize = 40;
-    static constexpr int swatchGap = 8;
-    static constexpr int columnGap = 28;
-    static constexpr int titleHeight = 24;
-    static constexpr int titleToModeGap = 14;
-    static constexpr int modeToSwatchesGap = 14;
-};
-
-namespace UiMetrics
-{
-    constexpr float tickBoxOuterScale = 2.0f;
-    constexpr float tickBoxHorizontalBiasRatio = 0.1171875f;
-    constexpr float tickBoxInnerInsetRatio = 0.25f;
-
-    constexpr int tooltipMinWidth = 120;
-    constexpr int tooltipMinHeight = 38;
-    constexpr float tooltipHeightScale = 1.5f;
-    constexpr float tooltipAnchorXRatio = 0.42f;
-    constexpr float tooltipAnchorYRatio = 0.58f;
-    constexpr float tooltipParentMarginRatio = 0.11f;
-    constexpr float tooltipWidthPadFontRatio = 0.8f;
-    constexpr float tooltipTextInsetXRatio = 0.21f;
-    constexpr float tooltipTextInsetYRatio = 0.05f;
-
-    constexpr float versionFontRatio = 0.42f;
-    constexpr float versionHeightRatio = 0.62f;
-    constexpr float versionDesiredWidthRatio = 1.9f;
-}
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
 
 namespace UiStateKeys
 {
     constexpr const char* editorWidth = "uiEditorWidth";
     constexpr const char* editorHeight = "uiEditorHeight";
     constexpr const char* useCustomPalette = "uiUseCustomPalette";
-    constexpr const char* fxTailEnabled = "uiFxTailEnabled";
-    constexpr std::array<const char*, 4> customPalette {
+    constexpr const char* crtEnabled = "uiFxTailEnabled";  // string kept for preset compat
+    constexpr std::array<const char*, 2> customPalette {
         "uiCustomPalette0",
-        "uiCustomPalette1",
-        "uiCustomPalette2",
-        "uiCustomPalette3"
+        "uiCustomPalette1"
     };
 }
 
-static void dismissEditorOwnedModalPrompts (juce::LookAndFeel& editorLookAndFeel);
+// ── Timer constants ──
+static constexpr int kCrtTimerHz  = 10;
+static constexpr int kIdleTimerHz = 4;
 
-static void dismissEditorOwnedModalPrompts (juce::LookAndFeel& editorLookAndFeel)
-{
-    for (int i = juce::Component::getNumCurrentlyModalComponents() - 1; i >= 0; --i)
-    {
-        auto* modal = juce::Component::getCurrentlyModalComponent (i);
-        auto* alertWindow = dynamic_cast<juce::AlertWindow*> (modal);
-
-        if (alertWindow == nullptr)
-            continue;
-
-        if (&alertWindow->getLookAndFeel() != &editorLookAndFeel)
-            continue;
-
-        alertWindow->exitModalState (0);
-    }
-}
-
-static void bringPromptWindowToFront (juce::AlertWindow& aw)
-{
-    aw.setAlwaysOnTop (true);
-    aw.toFront (true);
-}
-
-// Helper: embed an AlertWindow in the editor overlay and center it.
-// Preserves previous behaviour; refactor to avoid duplication.
-void embedAlertWindowInOverlay (DisperserAudioProcessorEditor* editor,
-                                juce::AlertWindow* aw,
-                                bool bringTooltip = false)
-{
-    if (editor == nullptr || aw == nullptr)
-        return;
-
-    editor->setPromptOverlayActive (true);
-    editor->promptOverlay.addAndMakeVisible (*aw);
-    const int bx = juce::jmax (0, (editor->getWidth() - aw->getWidth()) / 2);
-    const int by = juce::jmax (0, (editor->getHeight() - aw->getHeight()) / 2);
-    aw->setBounds (bx, by, aw->getWidth(), aw->getHeight());
-    aw->toFront (false);
-    if (bringTooltip && editor->tooltipWindow)
-        editor->tooltipWindow->toFront (true);
-    aw->repaint();
-}
-
-// Ensure an AlertWindow fits the editor width when embedded and optionally
-// run a layout callback to reposition inner controls after a resize.
-static void fitAlertWindowToEditor (juce::AlertWindow& aw,
-                                    DisperserAudioProcessorEditor* editor,
-                                    std::function<void(juce::AlertWindow&)> layoutCb = {})
-{
-    if (editor == nullptr)
-        return;
-
-    const int overlayPad = 12;
-    const int availW = juce::jmax (120, editor->getWidth() - (overlayPad * 2));
-    if (aw.getWidth() > availW)
-    {
-        aw.setSize (availW, juce::jmin (aw.getHeight(), editor->getHeight() - (overlayPad * 2)));
-        if (layoutCb)
-            layoutCb (aw);
-    }
-}
-
-static void anchorEditorOwnedPromptWindows (DisperserAudioProcessorEditor& editor,
-                                            juce::LookAndFeel& editorLookAndFeel)
-{
-    for (int i = juce::Component::getNumCurrentlyModalComponents() - 1; i >= 0; --i)
-    {
-        auto* modal = juce::Component::getCurrentlyModalComponent (i);
-        auto* alertWindow = dynamic_cast<juce::AlertWindow*> (modal);
-
-        if (alertWindow == nullptr)
-            continue;
-
-        if (&alertWindow->getLookAndFeel() != &editorLookAndFeel)
-            continue;
-
-        alertWindow->centreAroundComponent (&editor, alertWindow->getWidth(), alertWindow->getHeight());
-        bringPromptWindowToFront (*alertWindow);
-    }
-}
-
-static juce::Font makeOverlayDisplayFont()
-{
-    return juce::Font (juce::FontOptions (28.0f).withStyle ("Bold"));
-}
-
-static void drawOverlayPanel (juce::Graphics& g,
-                              juce::Rectangle<int> bounds,
-                              juce::Colour background,
-                              juce::Colour outline)
-{
-    g.setColour (background);
-    g.fillRect (bounds);
-
-    g.setColour (outline);
-    g.drawRect (bounds, 1);
-}
-
-static juce::Colour lerpColourStops (const std::array<juce::Colour, 2>& gradient, float t)
-{
-    return gradient[0].interpolatedWith (gradient[1], juce::jlimit (0.0f, 1.0f, t));
-}
-
-static bool isAbsoluteGradientEndpoint (const juce::Colour& c,
-                                        const std::array<juce::Colour, 2>& gradient)
-{
-    const auto argb = c.getARGB();
-    return argb == gradient[0].getARGB() || argb == gradient[1].getARGB();
-}
-
-static void parseTailTuning (const juce::String& tuning,
-                             int& trimTailCount,
-                             float& repeatScale)
-{
-    trimTailCount = 0;
-    repeatScale = -1.0f;
-
-    const auto t = tuning.trim();
-    if (t.isEmpty())
-        return;
-
-    if (t.endsWithChar ('%'))
-    {
-        const auto number = t.dropLastCharacters (1).trim();
-        const double pct = number.getDoubleValue();
-        if (pct >= 0.0 && pct <= 100.0)
-            repeatScale = (float) (pct / 100.0);
-        return;
-    }
-
-    const int v = t.getIntValue();
-    if (v < 0)
-        trimTailCount = -v;
-}
-
-static float parseOptionalPercent01 (const juce::String& percentageText)
-{
-    const auto t = percentageText.trim();
-    if (t.isEmpty())
-        return -1.0f;
-
-    juce::String number = t;
-    if (number.endsWithChar ('%'))
-        number = number.dropLastCharacters (1).trim();
-
-    const double v = number.getDoubleValue();
-    if (v < 0.0 || v > 100.0)
-        return -1.0f;
-
-    return (float) (v / 100.0);
-}
+// ── Parameter listener IDs (shared by ctor + dtor) ──
+static constexpr std::array<const char*, 4> kUiMirrorParamIds {
+    DisperserAudioProcessor::kParamUiPalette,
+    DisperserAudioProcessor::kParamUiFxTail,
+    DisperserAudioProcessor::kParamUiColor0,
+    DisperserAudioProcessor::kParamUiColor1
+};
 
 static juce::String formatBarFrequencyHzText (double hz)
 {
     const double safeHz = juce::jmax (0.0, hz);
     return juce::String (safeHz, 3).toUpperCase() + " HZ";
-}
-
-static void drawTextWithRepeatedLastCharGradient (juce::Graphics& g,
-                                                  const juce::Rectangle<int>& area,
-                                                  const juce::String& sourceText,
-                                                  int horizontalSpacePx,
-                                                  const std::array<juce::Colour, 2>& gradient,
-                                                  int noCollisionRightX = -1,
-                                                  const juce::String& tailTuning = juce::String(),
-                                                  const juce::String& shrinkPerCharPercent = juce::String(),
-                                                  const juce::String& tailVerticalMode = juce::String(),
-                                                  const juce::String& referenceCharIndex = juce::String(),
-                                                  const juce::String& overlapPercent = juce::String())
-{
-    constexpr int kMaxTailCharsDrawn = 20;
-    constexpr float kMinTailCharPx = 3.0f;
-
-    if (area.getWidth() <= 0 || area.getHeight() <= 0)
-        return;
-
-    juce::String text = sourceText.toUpperCase().trim();
-
-    int trimTailCount = 0;
-    float repeatScale = -1.0f;
-    parseTailTuning (tailTuning, trimTailCount, repeatScale);
-
-    if (text.isEmpty())
-        return;
-
-    const auto font = g.getCurrentFont();
-    int maxWidth = juce::jmin (area.getWidth(), juce::jmax (0, horizontalSpacePx));
-    if (noCollisionRightX >= 0)
-        maxWidth = juce::jmin (maxWidth, juce::jmax (0, noCollisionRightX - area.getX()));
-
-    if (maxWidth <= 0)
-        return;
-
-    const int baseW = stringWidth (font, text);
-
-    g.setColour (gradient[0]);
-    g.drawText (text, area.getX(), area.getY(), juce::jmin (baseW, maxWidth), area.getHeight(), juce::Justification::left, false);
-
-    if (baseW >= maxWidth)
-        return;
-
-    const juce::juce_wchar lastChar = text[text.length() - 1];
-    juce::juce_wchar selectedChar = lastChar;
-    const auto refIdxText = referenceCharIndex.trim();
-    if (refIdxText.isNotEmpty())
-    {
-        const int idx = refIdxText.getIntValue();
-        if (idx >= 0 && idx < text.length())
-            selectedChar = text[idx];
-    }
-
-    juce::String tailChar;
-    tailChar += selectedChar;
-    const float shrinkStep01 = parseOptionalPercent01 (shrinkPerCharPercent);
-    const bool useShrink = (shrinkStep01 >= 0.0f);
-    const auto verticalMode = tailVerticalMode.trim().toLowerCase();
-    const float overlap01 = parseOptionalPercent01 (overlapPercent);
-    const float overlap = juce::jlimit (0.0f, 1.0f, overlap01 < 0.0f ? 0.0f : overlap01);
-    const float advanceFactor = 1.0f - overlap;
-
-    const float baseFontH = font.getHeight();
-    auto scaleForIndex = [&] (int index1Based)
-    {
-        if (! useShrink)
-            return 1.0f;
-
-        const float s = 1.0f - (shrinkStep01 * (float) index1Based);
-        return juce::jmax (0.1f, s);
-    };
-
-    const int availableTailW = juce::jmax (0, maxWidth - baseW);
-    juce::Array<float> xPositions;
-    juce::Array<int> widths;
-
-    float cursorX = 0.0f;
-    float maxRight = 0.0f;
-
-    for (int i = 1; i <= kMaxTailCharsDrawn; ++i)
-    {
-        auto fi = font;
-        fi.setHeight (baseFontH * scaleForIndex (i));
-        const int wi = stringWidth (fi, tailChar);
-        if (fi.getHeight() < kMinTailCharPx || wi < (int) std::ceil (kMinTailCharPx)
-            || wi <= 0)
-            break;
-
-        const float x = cursorX;
-        const float right = x + (float) wi;
-        if (right > (float) availableTailW + 1.0f)
-            break;
-
-        xPositions.add (x);
-        widths.add (wi);
-        maxRight = juce::jmax (maxRight, right);
-        cursorX += (float) wi * advanceFactor;
-    }
-
-    int repeatCount = xPositions.size();
-    repeatCount = juce::jmin (repeatCount, kMaxTailCharsDrawn);
-
-    if (repeatScale >= 0.0f)
-        repeatCount = (int) std::floor ((double) repeatCount * (double) repeatScale);
-
-    if (trimTailCount > 0)
-        repeatCount = juce::jmax (0, repeatCount - trimTailCount);
-
-    if (repeatCount <= 1)
-        return;
-
-    const int baseBaselineY = area.getY()
-                            + (int) std::round ((area.getHeight() - font.getHeight()) * 0.5f)
-                            + (int) std::round (font.getAscent());
-
-    // Draw from the end to the beginning so early indices stay visually on top.
-    int drawableCount = 0;
-    for (int i = repeatCount - 1; i >= 0; --i)
-    {
-        auto fi = font;
-        fi.setHeight (baseFontH * scaleForIndex (i + 1));
-        const int wi = juce::jmax (1, widths.getUnchecked (i));
-        if (fi.getHeight() < kMinTailCharPx || wi < (int) std::ceil (kMinTailCharPx))
-            continue;
-
-        const float t = (float) (i + 1) / (float) juce::jmax (1, repeatCount);
-        const auto c = lerpColourStops (gradient, t);
-        if (isAbsoluteGradientEndpoint (c, gradient))
-            continue;
-
-        ++drawableCount;
-    }
-
-    if (drawableCount <= 1)
-        return;
-
-    for (int i = repeatCount - 1; i >= 0; --i)
-    {
-        auto fi = font;
-        fi.setHeight (baseFontH * scaleForIndex (i + 1));
-        const int wi = juce::jmax (1, widths.getUnchecked (i));
-        if (fi.getHeight() < kMinTailCharPx || wi < (int) std::ceil (kMinTailCharPx))
-            continue;
-
-        const int x = area.getX() + baseW + juce::roundToInt (xPositions.getUnchecked (i));
-
-        const float t = (float) (i + 1) / (float) juce::jmax (1, repeatCount);
-        const auto c = lerpColourStops (gradient, t);
-        if (isAbsoluteGradientEndpoint (c, gradient))
-            continue;
-
-        g.setColour (c);
-
-        g.setFont (fi);
-
-        int baselineY = baseBaselineY;
-        if (verticalMode == "pyramid")
-        {
-            baselineY = area.getY()
-                      + (int) std::round ((area.getHeight() - fi.getHeight()) * 0.5f)
-                      + (int) std::round (fi.getAscent());
-        }
-        else if (verticalMode == "baseline")
-        {
-            baselineY = baseBaselineY;
-        }
-
-        g.drawSingleLineText (tailChar, x, baselineY, juce::Justification::left);
-    }
-
-    g.setFont (font);
-}
-
-static bool fits (juce::Graphics& g, const juce::String& s, int w)
-{
-    if (w <= 0) return false;
-    return stringWidth (g.getCurrentFont(), s) <= w;
-}
-
-// Variante “solo medir” (sin Graphics): para decidir enable/disable en resized()
-static bool fitsWithOptionalShrink_NoG (juce::Font font,
-                                       const juce::String& text,
-                                       int width,
-                                       float baseFontPx,
-                                       float shrinkFloorPx)
-{
-    if (width <= 0) return false;
-
-    font.setHeight (baseFontPx);
-    if (stringWidth (font, text) <= width)
-        return true;
-
-    for (float h = baseFontPx - 1.0f; h >= shrinkFloorPx; h -= 1.0f)
-    {
-        font.setHeight (h);
-        if (stringWidth (font, text) <= width)
-            return true;
-    }
-    return false;
-}
-
-static bool drawIfFitsWithOptionalShrink (juce::Graphics& g,
-                                         const juce::Rectangle<int>& area,
-                                         const juce::String& text,
-                                         float baseFontPx,
-                                         float shrinkFloorPx)
-{
-    auto font = g.getCurrentFont();
-    font.setHeight (baseFontPx);
-    g.setFont (font);
-
-    if (fits (g, text, area.getWidth()))
-    {
-        g.drawText (text, area, juce::Justification::left, false);
-        return true;
-    }
-
-    // pequeño shrink “suave” para intentar salvar unidades antes de abreviar
-    for (float h = baseFontPx - 1.0f; h >= shrinkFloorPx; h -= 1.0f)
-    {
-        font.setHeight (h);
-        g.setFont (font);
-        if (fits (g, text, area.getWidth()))
-        {
-            g.drawText (text, area, juce::Justification::left, false);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static void drawValueNoEllipsis (juce::Graphics& g,
-                                 const juce::Rectangle<int>& area,
-                                 const juce::String& fullText,
-                                 const juce::String& noUnitText,
-                                 const juce::String& intOnlyText,
-                                 float baseFontPx,
-                                 float minFontPx)
-{
-    if (area.getWidth() <= 2 || area.getHeight() <= 2)
-        return;
-
-    const auto full = fullText.toUpperCase();
-    const auto noU  = noUnitText.toUpperCase();
-    const auto intl = intOnlyText.toUpperCase();
-
-    const float softShrinkFloor = minFontPx;
-
-    // FULL (con shrink suave)
-    if (drawIfFitsWithOptionalShrink (g, area, full, baseFontPx, softShrinkFloor))
-        return;
-
-    // NO-UNIT (con shrink suave)
-    if (noU.isNotEmpty() && drawIfFitsWithOptionalShrink (g, area, noU, baseFontPx, softShrinkFloor))
-        return;
-
-    // INT (normal)
-    {
-        auto font = g.getCurrentFont();
-        font.setHeight (baseFontPx);
-        g.setFont (font);
-
-        if (intl.isNotEmpty() && fits (g, intl, area.getWidth()))
-        {
-            g.drawText (intl, area, juce::Justification::left, false);
-            return;
-        }
-
-        // shrink solo para el entero
-        for (float h = baseFontPx; h >= minFontPx; h -= 1.0f)
-        {
-            font.setHeight (h);
-            g.setFont (font);
-            if (intl.isNotEmpty() && fits (g, intl, area.getWidth()))
-            {
-                g.drawText (intl, area, juce::Justification::left, false);
-                return;
-            }
-        }
-    }
-}
-
-static bool drawValueWithRightAlignedSuffix (juce::Graphics& g,
-                                             const juce::Rectangle<int>& area,
-                                             const juce::String& valueText,
-                                             const juce::String& suffixText,
-                                             bool enableAutoMargin,
-                                             float baseFontPx,
-                                             float minFontPx,
-                                             const std::array<juce::Colour, 2>* tailGradient = nullptr,
-                                             bool tailFromSuffixToLeft = false,
-                                             bool lowercaseTailChars = false,
-                                             const juce::String& tailTuning = juce::String())
-{
-    constexpr int kMaxTailCharsDrawn = 20;
-    constexpr float kMinTailCharPx = 3.0f;
-    constexpr int kAutoMarginThresholdPx = 24;
-    constexpr int kSingleDigitTailBudgetChars = 8;
-    constexpr float kDefaultReverseShrinkStep01 = 0.20f;
-    constexpr float kSingleDigitReverseShrinkStep01 = 0.10f;
-    constexpr float kMinTailScale = 0.1f;
-    constexpr float kTailOverlap01 = 0.0f;
-    constexpr int kTailTokenChars = 1;
-
-    if (area.getWidth() <= 2 || area.getHeight() <= 2)
-        return false;
-
-    const auto value = valueText.toUpperCase();
-    const auto suffix = suffixText.toUpperCase();
-
-    auto font = g.getCurrentFont();
-
-    for (float h = baseFontPx; h >= minFontPx; h -= 1.0f)
-    {
-        font.setHeight (h);
-        g.setFont (font);
-
-        const int suffixW = stringWidth (font, suffix);
-        const int valueW = stringWidth (font, value);
-        const int gapW = juce::jmax (2, stringWidth (font, " "));
-
-        const int totalW = valueW + (suffix.isNotEmpty() ? gapW : 0) + suffixW;
-        if (totalW > area.getWidth())
-            continue;
-
-        const int suffixX = area.getRight() - suffixW;
-        const int valueRight = suffixX - (suffix.isNotEmpty() ? gapW : 0);
-        const int fullValueAreaW = juce::jmax (1, valueRight - area.getX());
-        const int freeSpace = juce::jmax (0, fullValueAreaW - valueW);
-
-        int valueX = area.getX();
-        if (enableAutoMargin && freeSpace > kAutoMarginThresholdPx)
-            valueX += freeSpace / 2;
-
-        const int valueAreaW = juce::jmax (1, valueRight - valueX);
-
-        auto computeSingleDigitReverseLaneWidth = [&]() -> int
-        {
-            const juce::String tailToken = suffix.substring (0, 1);
-            const int tailTokenW = juce::jmax (1, stringWidth (font, tailToken));
-            const int tailBudgetW = juce::jmax (tailTokenW * kSingleDigitTailBudgetChars,
-                                                stringWidth (font, "SSSS"));
-            const int desiredLaneW = valueW + juce::jmax (gapW, tailBudgetW);
-            const int minLaneW = valueW + gapW;
-
-            if (valueAreaW <= minLaneW)
-                return valueAreaW;
-
-            return juce::jlimit (minLaneW, valueAreaW, desiredLaneW);
-        };
-
-        int valueDrawW = valueAreaW;
-        if (tailGradient != nullptr && tailFromSuffixToLeft && suffix.isNotEmpty() && value.length() <= 1)
-            valueDrawW = computeSingleDigitReverseLaneWidth();
-
-        if (tailGradient != nullptr && ! tailFromSuffixToLeft)
-        {
-            const auto valueArea = juce::Rectangle<int> (valueX, area.getY(), valueDrawW, area.getHeight());
-            drawTextWithRepeatedLastCharGradient (g, valueArea, value, valueDrawW, *tailGradient, valueX + valueDrawW,
-                                                  tailTuning, "20%", "pyramid");
-            g.setColour ((*tailGradient)[0]);
-        }
-        else
-        {
-            g.drawText (value, valueX, area.getY(), valueDrawW, area.getHeight(), juce::Justification::left, false);
-        }
-
-        g.drawText (suffix, suffixX, area.getY(), suffixW, area.getHeight(), juce::Justification::left, false);
-
-        if (tailGradient != nullptr && tailFromSuffixToLeft && suffix.isNotEmpty())
-        {
-            int trimTailCount = 0;
-            float repeatScale = -1.0f;
-            parseTailTuning (tailTuning, trimTailCount, repeatScale);
-
-            const float shrinkStep01 = (value.length() <= 1) ? kSingleDigitReverseShrinkStep01
-                                                              : kDefaultReverseShrinkStep01;
-            const bool useShrink = (shrinkStep01 >= 0.0f);
-            const float advanceFactor = 1.0f - kTailOverlap01;
-
-            juce::String tailChar = suffix.substring (0, juce::jmin (kTailTokenChars, suffix.length()));
-            if (lowercaseTailChars)
-                tailChar = tailChar.toLowerCase();
-
-            const int tailCharW = stringWidth (font, tailChar);
-            if (tailCharW > 0)
-            {
-                const int leftLimit = valueX + valueW;
-                const int rightLimit = suffixX;
-                const int fittingSlackPx = juce::jmax (2, tailCharW / 2);
-                const int leftLimitForFit = leftLimit - fittingSlackPx;
-
-                auto scaleForIndex = [&] (int index1Based)
-                {
-                    if (! useShrink)
-                        return 1.0f;
-
-                    const float s = 1.0f - (shrinkStep01 * (float) index1Based);
-                    return juce::jmax (kMinTailScale, s);
-                };
-
-                int repeatCount = 0;
-                float usedTailW = 0.0f;
-                for (int i = 1; i <= kMaxTailCharsDrawn; ++i)
-                {
-                    auto fi = font;
-                    fi.setHeight (font.getHeight() * scaleForIndex (i));
-                    const int wi = stringWidth (fi, tailChar);
-                    const int xCandidate = rightLimit - (int) std::floor (usedTailW + 1.0e-6f) - wi;
-                    if (fi.getHeight() < kMinTailCharPx || wi < (int) std::ceil (kMinTailCharPx)
-                        || wi <= 0 || xCandidate < leftLimitForFit)
-                        break;
-
-                    usedTailW += (float) wi * advanceFactor;
-                    ++repeatCount;
-                }
-
-                if (repeatScale >= 0.0f)
-                    repeatCount = (int) std::floor ((double) repeatCount * (double) repeatScale);
-
-                if (trimTailCount > 0)
-                    repeatCount = juce::jmax (0, repeatCount - trimTailCount);
-
-                repeatCount = juce::jmin (repeatCount, kMaxTailCharsDrawn);
-
-                if (repeatCount > 1)
-                {
-                    std::array<int, (size_t) kMaxTailCharsDrawn> drawXs {};
-                    std::array<int, (size_t) kMaxTailCharsDrawn> drawBaselines {};
-                    int draw_count = 0;
-
-                    float consumedW = 0.0f;
-                    for (int i = 0; i < repeatCount; ++i)
-                    {
-                        auto fi = font;
-                        fi.setHeight (font.getHeight() * scaleForIndex (i + 1));
-                        const int wi = juce::jmax (1, stringWidth (fi, tailChar));
-                        if (fi.getHeight() < kMinTailCharPx || wi < (int) std::ceil (kMinTailCharPx))
-                            break;
-                        const int x = rightLimit - (int) std::floor (consumedW + 1.0e-6f) - wi;
-
-                        const int baselineY = area.getY()
-                                            + (int) std::round ((area.getHeight() - fi.getHeight()) * 0.5f)
-                                            + (int) std::round (fi.getAscent());
-
-                        if (draw_count >= kMaxTailCharsDrawn)
-                            break;
-
-                        drawXs[(size_t) draw_count] = x;
-                        drawBaselines[(size_t) draw_count] = baselineY;
-                        ++draw_count;
-                        consumedW += (float) wi * advanceFactor;
-                    }
-
-                    if (draw_count <= 1)
-                    {
-                        g.setFont (font);
-                        g.setColour ((*tailGradient)[0]);
-                        return true;
-                    }
-
-                    int drawable_count = 0;
-                    for (int i = draw_count - 1; i >= 0; --i)
-                    {
-                        const float t = (float) (i + 1) / (float) juce::jmax (1, draw_count);
-                        const auto c = lerpColourStops (*tailGradient, t);
-                        if (isAbsoluteGradientEndpoint (c, *tailGradient))
-                            continue;
-                        ++drawable_count;
-                    }
-
-                    if (drawable_count <= 1)
-                    {
-                        g.setFont (font);
-                        g.setColour ((*tailGradient)[0]);
-                        return true;
-                    }
-
-                    // Reversed stacking priority: draw darker/later first,
-                    // then lighter/earlier on top.
-                    for (int i = draw_count - 1; i >= 0; --i)
-                    {
-                        auto fi = font;
-                        fi.setHeight (font.getHeight() * scaleForIndex (i + 1));
-
-                        const float t = (float) (i + 1) / (float) juce::jmax (1, draw_count);
-                        const auto c = lerpColourStops (*tailGradient, t);
-                        if (isAbsoluteGradientEndpoint (c, *tailGradient))
-                            continue;
-
-                        g.setColour (c);
-                        g.setFont (fi);
-                        g.drawSingleLineText (tailChar, drawXs[(size_t) i], drawBaselines[(size_t) i], juce::Justification::left);
-                    }
-
-                    g.setFont (font);
-                    g.setColour ((*tailGradient)[0]);
-                }
-            }
-        }
-
-        return true;
-    }
-
-    return false;
 }
 
 //========================== LookAndFeel ==========================
@@ -794,7 +74,7 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawTickBox (juce::Graphics& g, 
     const auto local = button.getLocalBounds().toFloat().reduced (1.0f);
     const float side = juce::jlimit (14.0f,
                                      juce::jmax (14.0f, local.getHeight() - 2.0f),
-                                     std::round (local.getHeight() * 0.50f));
+                                     std::round (local.getHeight() * 0.65f));
 
     auto r = juce::Rectangle<float> (local.getX() + 2.0f,
                                      local.getCentreY() - (side * 0.5f),
@@ -816,6 +96,37 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawTickBox (juce::Graphics& g, 
     {
         g.setColour (scheme.bg);
         g.fillRect (inner);
+    }
+}
+
+void DisperserAudioProcessorEditor::MinimalLNF::drawScrollbar (juce::Graphics& g,
+                                                               juce::ScrollBar&,
+                                                               int x, int y, int width, int height,
+                                                               bool isScrollbarVertical,
+                                                               int thumbStartPosition, int thumbSize,
+                                                               bool isMouseOver, bool isMouseDown)
+{
+    juce::ignoreUnused (x, y, width, height);
+
+    const auto thumbColour = scheme.text.withAlpha (isMouseDown ? 0.7f
+                                                     : isMouseOver ? 0.5f
+                                                                   : 0.3f);
+    constexpr float barThickness = 7.0f;
+    constexpr float cornerRadius = 3.5f;
+
+    if (isScrollbarVertical)
+    {
+        const float bx = (float) (x + width) - barThickness - 1.0f;
+        g.setColour (thumbColour);
+        g.fillRoundedRectangle (bx, (float) thumbStartPosition,
+                                barThickness, (float) thumbSize, cornerRadius);
+    }
+    else
+    {
+        const float by = (float) (y + height) - barThickness - 1.0f;
+        g.setColour (thumbColour);
+        g.fillRoundedRectangle ((float) thumbStartPosition, by,
+                                (float) thumbSize, barThickness, cornerRadius);
     }
 }
 
@@ -955,22 +266,23 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     const std::array<BarSlider*, 4> barSliders { &amountSlider, &seriesSlider, &freqSlider, &shapeSlider };
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
-    fxTailEnabled = audioProcessor.getUiFxTailEnabled();
+    crtEnabled = audioProcessor.getUiFxTailEnabled();
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 2; ++i)
         customPalette[(size_t) i] = audioProcessor.getUiCustomPaletteColour (i);
 
     setOpaque (true);
+    setBufferedToImage (true);
 
     applyActivePalette();
     setLookAndFeel (&lnf);
-    tooltipWindow = std::make_unique<juce::TooltipWindow> (nullptr, 250);
+    tooltipWindow = std::make_unique<juce::TooltipWindow> (this, 250);
     tooltipWindow->setLookAndFeel (&lnf);
     tooltipWindow->setAlwaysOnTop (true);
+    tooltipWindow->setInterceptsMouseClicks (false, false);
 
     setResizable (true, true);
 
-    // Para que el host/JUCE clipee de verdad
     setResizeLimits (kMinW, kMinH, kMaxW, kMaxH);
 
     resizeConstrainer.setMinimumSize (kMinW, kMinH);
@@ -978,8 +290,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     resizerCorner = std::make_unique<juce::ResizableCornerComponent> (this, &resizeConstrainer);
     addAndMakeVisible (*resizerCorner);
-    if (resizerCorner != nullptr)
-        resizerCorner->addMouseListener (this, true);
+    resizerCorner->addMouseListener (this, true);
 
     addAndMakeVisible (promptOverlay);
     promptOverlay.setInterceptsMouseClicks (true, true);
@@ -993,7 +304,6 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     lastPersistedEditorW = restoredW;
     lastPersistedEditorH = restoredH;
 
-    // ctor
     for (auto* slider : barSliders)
     {
         slider->setOwner (this);
@@ -1041,15 +351,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindButton (rvsAttachment, DisperserAudioProcessor::kParamReverse, rvsButton);
     bindButton (invAttachment, DisperserAudioProcessor::kParamInv, invButton);
 
-    const std::array<const char*, 6> uiMirrorParamIds {
-        DisperserAudioProcessor::kParamUiPalette,
-        DisperserAudioProcessor::kParamUiFxTail,
-        DisperserAudioProcessor::kParamUiColor0,
-        DisperserAudioProcessor::kParamUiColor1,
-        DisperserAudioProcessor::kParamUiColor2,
-        DisperserAudioProcessor::kParamUiColor3
-    };
-    for (auto* paramId : uiMirrorParamIds)
+    for (auto* paramId : kUiMirrorParamIds)
         audioProcessor.apvts.addParameterListener (paramId, this);
 
     juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThis (this);
@@ -1061,7 +363,6 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         safeThis->applyPersistedUiStateFromProcessor (true, true);
     });
 
-    // Re-apply persisted UI size after short delays to override late host resizes.
     juce::Timer::callAfterDelay (250, [safeThis]()
     {
         if (safeThis == nullptr)
@@ -1076,28 +377,22 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         safeThis->applyPersistedUiStateFromProcessor (true, true);
     });
 
-    startTimerHz (10);
+    applyCrtState (crtEnabled);
 
     refreshLegendTextCache();
+    resized();
 }
 
 DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
 {
+    setComponentEffect (nullptr);
     stopTimer();
 
-    const std::array<const char*, 6> uiMirrorParamIds {
-        DisperserAudioProcessor::kParamUiPalette,
-        DisperserAudioProcessor::kParamUiFxTail,
-        DisperserAudioProcessor::kParamUiColor0,
-        DisperserAudioProcessor::kParamUiColor1,
-        DisperserAudioProcessor::kParamUiColor2,
-        DisperserAudioProcessor::kParamUiColor3
-    };
-    for (auto* paramId : uiMirrorParamIds)
+    for (auto* paramId : kUiMirrorParamIds)
         audioProcessor.apvts.removeParameterListener (paramId, this);
 
     audioProcessor.setUiUseCustomPalette (useCustomPalette);
-    audioProcessor.setUiFxTailEnabled (fxTailEnabled);
+    audioProcessor.setUiFxTailEnabled (crtEnabled);
 
     dismissEditorOwnedModalPrompts (lnf);
     setPromptOverlayActive (false);
@@ -1116,18 +411,23 @@ void DisperserAudioProcessorEditor::applyActivePalette()
 {
     const auto& palette = useCustomPalette ? customPalette : defaultPalette;
 
-    DISPXScheme scheme;
+    DISPScheme scheme;
     scheme.bg = palette[1];
     scheme.fg = palette[0];
     scheme.outline = palette[0];
     scheme.text = palette[0];
-    scheme.fxGradientStart = palette[2];
-    scheme.fxGradientEnd = palette[3];
 
-    for (auto& s : schemes)
-        s = scheme;
+    activeScheme = scheme;
+    lnf.setScheme (activeScheme);
+}
 
-    lnf.setScheme (schemes[(size_t) currentSchemeIndex]);
+void DisperserAudioProcessorEditor::applyCrtState (bool enabled)
+{
+    crtEnabled = enabled;
+    crtEffect.setEnabled (crtEnabled);
+    setComponentEffect (crtEnabled ? &crtEffect : nullptr);
+    stopTimer();
+    startTimerHz (crtEnabled ? kCrtTimerHz : kIdleTimerHz);
 }
 
 void DisperserAudioProcessorEditor::applyLabelTextColour (juce::Label& label, juce::Colour colour)
@@ -1142,14 +442,9 @@ void DisperserAudioProcessorEditor::sliderValueChanged (juce::Slider* slider)
         return s == &amountSlider || s == &seriesSlider || s == &freqSlider || s == &shapeSlider;
     };
 
-    const int previousMode = labelVisibilityMode;
-    const int previousValueColumnWidth = getTargetValueColumnWidth();
-    const bool legendTextLengthChanged = refreshLegendTextCache();
-    if (legendTextLengthChanged)
-        updateLegendVisibility();
-    const int currentValueColumnWidth = getTargetValueColumnWidth();
+    refreshLegendTextCache();
 
-    if (labelVisibilityMode != previousMode || currentValueColumnWidth != previousValueColumnWidth || slider == nullptr)
+    if (slider == nullptr)
     {
         repaint();
         return;
@@ -1202,18 +497,31 @@ void DisperserAudioProcessorEditor::moved()
     anchorEditorOwnedPromptWindows (*this, lnf);
 }
 
+void DisperserAudioProcessorEditor::parentHierarchyChanged()
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+    {
+        if (auto nativeHandle = peer->getNativeHandle())
+        {
+            static HBRUSH blackBrush = CreateSolidBrush (RGB (0, 0, 0));
+            SetClassLongPtr (static_cast<HWND> (nativeHandle),
+                             GCLP_HBRBACKGROUND,
+                             reinterpret_cast<LONG_PTR> (blackBrush));
+        }
+    }
+   #endif
+}
+
 void DisperserAudioProcessorEditor::parameterChanged (const juce::String& parameterID, float)
 {
-    // Width/height should trigger applying size; other UI params should update palette/fx/colors.
     const bool isSizeParam = parameterID == DisperserAudioProcessor::kParamUiWidth
                          || parameterID == DisperserAudioProcessor::kParamUiHeight;
 
     const bool isUiVisualParam = parameterID == DisperserAudioProcessor::kParamUiPalette
                              || parameterID == DisperserAudioProcessor::kParamUiFxTail
                              || parameterID == DisperserAudioProcessor::kParamUiColor0
-                             || parameterID == DisperserAudioProcessor::kParamUiColor1
-                             || parameterID == DisperserAudioProcessor::kParamUiColor2
-                             || parameterID == DisperserAudioProcessor::kParamUiColor3;
+                             || parameterID == DisperserAudioProcessor::kParamUiColor1;
 
     if (! isSizeParam && ! isUiVisualParam)
         return;
@@ -1249,6 +557,20 @@ void DisperserAudioProcessorEditor::timerCallback()
         lastPersistedEditorW = w;
         lastPersistedEditorH = h;
     }
+
+    // ── CRT animation ──
+    if (crtEnabled && w > 0 && h > 0)
+    {
+        crtTime += 0.1f;
+        crtEffect.setTime (crtTime);
+
+        const bool anySliderDragging = amountSlider.isMouseButtonDown()
+                                    || seriesSlider.isMouseButtonDown()
+                                    || freqSlider.isMouseButtonDown()
+                                    || shapeSlider.isMouseButtonDown();
+        if (! anySliderDragging)
+            repaint();
+    }
 }
 
 void DisperserAudioProcessorEditor::applyPersistedUiStateFromProcessor (bool applySize, bool applyPaletteAndFx)
@@ -1269,7 +591,7 @@ void DisperserAudioProcessorEditor::applyPersistedUiStateFromProcessor (bool app
     if (applyPaletteAndFx)
     {
         bool paletteChanged = false;
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 2; ++i)
         {
             const auto c = audioProcessor.getUiCustomPaletteColour (i);
             if (customPalette[(size_t) i].getARGB() != c.getARGB())
@@ -1280,16 +602,16 @@ void DisperserAudioProcessorEditor::applyPersistedUiStateFromProcessor (bool app
         }
 
         const bool targetUseCustomPalette = audioProcessor.getUiUseCustomPalette();
-        const bool targetFxTailEnabled = audioProcessor.getUiFxTailEnabled();
+        const bool targetCrtEnabled = audioProcessor.getUiFxTailEnabled();
 
         const bool paletteSwitchChanged = (useCustomPalette != targetUseCustomPalette);
-        const bool fxChanged = (fxTailEnabled != targetFxTailEnabled);
+        const bool fxChanged = (crtEnabled != targetCrtEnabled);
 
         if (paletteSwitchChanged)
             useCustomPalette = targetUseCustomPalette;
 
         if (fxChanged)
-            fxTailEnabled = targetFxTailEnabled;
+            applyCrtState (targetCrtEnabled);
 
         if (paletteChanged || paletteSwitchChanged)
             applyActivePalette();
@@ -1351,11 +673,9 @@ void DisperserAudioProcessorEditor::setupBar (juce::Slider& s)
     s.setSliderStyle (juce::Slider::LinearBar);
     s.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
 
-    // Disable tooltip/popup above the bar (we use our own numeric popup)
     s.setPopupDisplayEnabled (false, false, this);
     s.setTooltip (juce::String());
 
-    // IMPORTANT: disable popup menu so right-click can be used for our numeric popup
     s.setPopupMenuEnabled (false);
 
     s.setColour (juce::Slider::trackColourId, juce::Colours::transparentBlack);
@@ -1367,54 +687,10 @@ void DisperserAudioProcessorEditor::setupBar (juce::Slider& s)
 
 namespace
 {
-    static double roundToDecimals (double value, int decimals)
-    {
-        const int safeDecimals = juce::jlimit (0, 9, decimals);
-        const double scale = std::pow (10.0, (double) safeDecimals);
-        return std::round (value * scale) / scale;
-    }
-
-    constexpr int kPromptWidth = 460;
-    constexpr int kPromptHeight = 336;
-    constexpr int kPromptInnerMargin = 24;
-    constexpr int kPromptFooterBottomPad = 24;
-    constexpr int kPromptFooterGap = 12;
-    constexpr int kPromptBodyTopPad = 24;
-    constexpr int kPromptBodyBottomPad = 18;
-    constexpr const char* kPromptSuffixLabelId = "promptSuffixLabel";
-
-    constexpr float kPromptEditorFontScale = 1.5f;
-    constexpr float kPromptEditorHeightScale = 1.4f;
-    constexpr int kPromptEditorHeightPadPx = 6;
-    constexpr int kPromptEditorRaiseYPx = 8;
-    constexpr int kPromptEditorMinTopPx = 6;
-    constexpr int kPromptEditorMinWidthPx = 180;
-    constexpr int kPromptEditorMaxWidthPx = 240;
-    constexpr int kPromptEditorHostPadPx = 80;
-
-    constexpr int kPromptInlineContentPadPx = 8;
-    constexpr int kPromptSuffixVInsetPx = 1;
-    constexpr int kPromptSuffixBaselineDefaultPx = 3;
-    constexpr int kPromptSuffixBaselineShapePx = 4;
-
     constexpr int kTitleAreaExtraHeightPx = 4;
     constexpr int kTitleRightGapToInfoPx = 8;
     constexpr int kVersionGapPx = 8;
     constexpr int kToggleLegendCollisionPadPx = 6;
-
-    void applyPromptShellSize (juce::AlertWindow& aw)
-    {
-        aw.setSize (kPromptWidth, kPromptHeight);
-    }
-
-    int getAlertButtonsTop (const juce::AlertWindow& aw)
-    {
-        int buttonsTop = aw.getHeight() - (kPromptFooterBottomPad + 36);
-        for (int i = 0; i < aw.getNumButtons(); ++i)
-            if (auto* btn = aw.getButton (i))
-                buttonsTop = juce::jmin (buttonsTop, btn->getY());
-        return buttonsTop;
-    }
 
     struct PopupSwatchButton final : public juce::TextButton
     {
@@ -1455,245 +731,40 @@ namespace
         }
     };
 
-}
-
-static void layoutAlertWindowButtons (juce::AlertWindow& aw)
-{
-    const int btnCount = aw.getNumButtons();
-    if (btnCount <= 0)
-        return;
-
-    const int footerY = aw.getHeight() - kPromptFooterBottomPad;
-    const int sideMargin = kPromptInnerMargin;
-    const int buttonGap = kPromptFooterGap;
-
-    if (btnCount == 1)
+    // Label that renders using TextLayout instead of the default
+    // drawFittedText / GlyphArrangement path.  This guarantees that
+    // the rendered line-wrapping matches the TextLayout-based height
+    // measurement in layoutInfoPopupContent, preventing clipping.
+    struct TextLayoutLabel final : public juce::Label
     {
-        if (auto* btn = aw.getButton (0))
+        using juce::Label::Label;
+
+        void paint (juce::Graphics& g) override
         {
-            auto r = btn->getBounds();
-            r.setWidth (juce::jmax (80, r.getWidth()));
-            r.setX ((aw.getWidth() - r.getWidth()) / 2);
-            r.setY (footerY - r.getHeight());
-            btn->setBounds (r);
+            g.fillAll (findColour (backgroundColourId));
+
+            if (isBeingEdited())
+                return;
+
+            const auto f     = getFont();
+            const auto area  = getBorderSize().subtractedFrom (getLocalBounds()).toFloat();
+            const auto alpha = isEnabled() ? 1.0f : 0.5f;
+
+            juce::AttributedString as;
+            as.append (getText(), f,
+                       findColour (textColourId).withMultipliedAlpha (alpha));
+            as.setJustification (getJustificationType());
+
+            juce::TextLayout layout;
+            layout.createLayout (as, area.getWidth());
+            layout.draw (g, area);
         }
-        return;
-    }
-
-    const int totalW = aw.getWidth();
-    const int totalGap = (btnCount - 1) * buttonGap;
-    const int btnWidth = juce::jmax (20, (totalW - (2 * sideMargin) - totalGap) / btnCount);
-
-    int x = sideMargin;
-    for (int i = 0; i < btnCount; ++i)
-    {
-        if (auto* btn = aw.getButton (i))
-        {
-            auto r = btn->getBounds();
-            r.setWidth (btnWidth);
-            r.setY (footerY - r.getHeight());
-            r.setX (x);
-            btn->setBounds (r);
-        }
-        x += btnWidth + buttonGap;
-    }
-}
-
-static void layoutInfoPopupContent (juce::AlertWindow& aw)
-{
-    layoutAlertWindowButtons (aw);
-
-    const int contentTop = kPromptBodyTopPad;
-    const int contentBottom = getAlertButtonsTop (aw) - kPromptBodyBottomPad;
-    const int contentH = juce::jmax (0, contentBottom - contentTop);
-
-    auto* infoLabel = dynamic_cast<juce::Label*> (aw.findChildWithID ("infoText"));
-    auto* infoLink = dynamic_cast<juce::HyperlinkButton*> (aw.findChildWithID ("infoLink"));
-
-    if (infoLabel != nullptr && infoLink != nullptr)
-    {
-        const int labelH = juce::jlimit (26, juce::jmax (26, contentH), (int) std::lround (contentH * 0.34));
-        const int linkH = juce::jlimit (20, 34, (int) std::lround (contentH * 0.18));
-
-        const int freeH = juce::jmax (0, contentH - labelH - linkH);
-        const int gap = freeH / 3;
-        const int labelY = contentTop + gap;
-        const int linkY = labelY + labelH + gap;
-
-        infoLabel->setBounds (kPromptInnerMargin,
-                              labelY,
-                              aw.getWidth() - (2 * kPromptInnerMargin),
-                              labelH);
-
-        infoLink->setBounds (kPromptInnerMargin,
-                             linkY,
-                             aw.getWidth() - (2 * kPromptInnerMargin),
-                             linkH);
-        return;
-    }
-
-    if (infoLabel != nullptr)
-    {
-        infoLabel->setBounds (kPromptInnerMargin,
-                              contentTop,
-                              aw.getWidth() - (2 * kPromptInnerMargin),
-                              juce::jmax (20, contentH));
-    }
-}
-
-static juce::String colourToHexRgb (juce::Colour c)
-{
-    auto h2 = [] (juce::uint8 v)
-    {
-        return juce::String::toHexString ((int) v).paddedLeft ('0', 2).toUpperCase();
     };
-
-    return "#" + h2 (c.getRed()) + h2 (c.getGreen()) + h2 (c.getBlue());
-}
-
-static bool tryParseHexColour (juce::String text, juce::Colour& out)
-{
-    auto isHexDigitAscii = [] (juce::juce_wchar ch)
-    {
-        return (ch >= '0' && ch <= '9')
-            || (ch >= 'A' && ch <= 'F')
-            || (ch >= 'a' && ch <= 'f');
-    };
-
-    text = text.trim();
-    if (text.startsWithChar ('#'))
-        text = text.substring (1);
-
-    if (text.length() != 6 && text.length() != 8)
-        return false;
-
-    for (int i = 0; i < text.length(); ++i)
-        if (! isHexDigitAscii (text[i]))
-            return false;
-
-    if (text.length() == 6)
-    {
-        const auto r = (juce::uint8) text.substring (0, 2).getHexValue32();
-        const auto g = (juce::uint8) text.substring (2, 4).getHexValue32();
-        const auto b = (juce::uint8) text.substring (4, 6).getHexValue32();
-        out = juce::Colour (r, g, b);
-        return true;
-    }
-
-    const auto a = (juce::uint8) text.substring (0, 2).getHexValue32();
-    const auto r = (juce::uint8) text.substring (2, 4).getHexValue32();
-    const auto g = (juce::uint8) text.substring (4, 6).getHexValue32();
-    const auto b = (juce::uint8) text.substring (6, 8).getHexValue32();
-    out = juce::Colour (r, g, b).withAlpha ((float) a / 255.0f);
-    return true;
-}
-
-static void setPaletteSwatchColour (juce::TextButton& b, juce::Colour colour)
-{
-    b.setButtonText ("");
-    b.setColour (juce::TextButton::buttonColourId, colour);
-    b.setColour (juce::TextButton::buttonOnColourId, colour);
-}
-
-static void stylePromptTextEditor (juce::TextEditor& te,
-                                   juce::Colour bg,
-                                   juce::Colour text,
-                                   juce::Colour accent,
-                                   juce::Font baseFont,
-                                   int hostWidth,
-                                   bool widenAndCenter)
-{
-    auto popupFont = baseFont;
-    popupFont.setHeight (popupFont.getHeight() * kPromptEditorFontScale);
-    te.setFont (popupFont);
-    te.applyFontToAllText (popupFont);
-    te.setJustification (juce::Justification::centred);
-    te.setIndents (0, 0);
-
-    te.setColour (juce::TextEditor::backgroundColourId,      bg);
-    te.setColour (juce::TextEditor::textColourId,            text);
-    te.setColour (juce::TextEditor::outlineColourId,         bg);
-    te.setColour (juce::TextEditor::focusedOutlineColourId,  bg);
-    te.setColour (juce::TextEditor::highlightColourId,       accent.withAlpha (0.35f));
-    te.setColour (juce::TextEditor::highlightedTextColourId, text);
-
-    auto r = te.getBounds();
-    r.setHeight ((int) (popupFont.getHeight() * kPromptEditorHeightScale) + kPromptEditorHeightPadPx);
-    r.setY (juce::jmax (kPromptEditorMinTopPx, r.getY() - kPromptEditorRaiseYPx));
-
-    if (widenAndCenter)
-    {
-        const int editorW = juce::jlimit (kPromptEditorMinWidthPx,
-                                          kPromptEditorMaxWidthPx,
-                                          hostWidth - kPromptEditorHostPadPx);
-        r.setWidth (editorW);
-        r.setX ((hostWidth - r.getWidth()) / 2);
-    }
-
-    te.setBounds (r);
-    te.selectAll();
-}
-
-static void centrePromptTextEditorVertically (juce::AlertWindow& aw,
-                                              juce::TextEditor& te,
-                                              int minTop = kPromptEditorMinTopPx)
-{
-    int buttonsTop = aw.getHeight();
-    for (int i = 0; i < aw.getNumButtons(); ++i)
-        if (auto* btn = aw.getButton (i))
-            buttonsTop = juce::jmin (buttonsTop, btn->getY());
-
-    auto r = te.getBounds();
-    const int centeredY = (buttonsTop - r.getHeight()) / 2;
-    r.setY (juce::jmax (minTop, centeredY));
-    te.setBounds (r);
-}
-
-static void focusAndSelectPromptTextEditor (juce::AlertWindow& aw, const juce::String& editorId)
-{
-    juce::Component::SafePointer<juce::AlertWindow> safeAw (&aw);
-    juce::MessageManager::callAsync ([safeAw, editorId]()
-    {
-        if (safeAw == nullptr)
-            return;
-
-        auto* te = safeAw->getTextEditor (editorId);
-        if (te == nullptr)
-            return;
-
-        if (te->isShowing() && te->isEnabled() && te->getPeer() != nullptr)
-            te->grabKeyboardFocus();
-
-        te->selectAll();
-    });
-}
-
-static void preparePromptTextEditor (juce::AlertWindow& aw,
-                                     const juce::String& editorId,
-                                     juce::Colour bg,
-                                     juce::Colour text,
-                                     juce::Colour accent,
-                                     juce::Font baseFont,
-                                     bool widenAndCenter,
-                                     int minTop = 6)
-{
-    if (auto* te = aw.getTextEditor (editorId))
-    {
-        stylePromptTextEditor (*te,
-                               bg,
-                               text,
-                               accent,
-                               baseFont,
-                               aw.getWidth(),
-                               widenAndCenter);
-        centrePromptTextEditorVertically (aw, *te, minTop);
-        focusAndSelectPromptTextEditor (aw, editorId);
-    }
 }
 
 static void syncGraphicsPopupState (juce::AlertWindow& aw,
-                                    const std::array<juce::Colour, 4>& defaultPalette,
-                                    const std::array<juce::Colour, 4>& customPalette,
+                                    const std::array<juce::Colour, 2>& defaultPalette,
+                                    const std::array<juce::Colour, 2>& customPalette,
                                     bool useCustomPalette)
 {
     if (auto* t = dynamic_cast<juce::ToggleButton*> (aw.findChildWithID ("paletteDefaultToggle")))
@@ -1701,7 +772,7 @@ static void syncGraphicsPopupState (juce::AlertWindow& aw,
     if (auto* t = dynamic_cast<juce::ToggleButton*> (aw.findChildWithID ("paletteCustomToggle")))
         t->setToggleState (useCustomPalette, juce::dontSendNotification);
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 2; ++i)
     {
         if (auto* dflt = dynamic_cast<juce::TextButton*> (aw.findChildWithID ("defaultSwatch" + juce::String (i))))
             setPaletteSwatchColour (*dflt, defaultPalette[(size_t) i]);
@@ -1712,14 +783,12 @@ static void syncGraphicsPopupState (juce::AlertWindow& aw,
         }
     }
 
-    // Helper for static context: safely apply text colour to a label pointer
     auto applyLabelTextColourTo = [] (juce::Label* lbl, juce::Colour col)
     {
         if (lbl != nullptr)
             lbl->setColour (juce::Label::textColourId, col);
     };
 
-    // Ensure popup labels reflect the active palette text colour
     const juce::Colour activeText = useCustomPalette ? customPalette[0] : defaultPalette[0];
     applyLabelTextColourTo (dynamic_cast<juce::Label*> (aw.findChildWithID ("paletteDefaultLabel")), activeText);
     applyLabelTextColourTo (dynamic_cast<juce::Label*> (aw.findChildWithID ("paletteCustomLabel")), activeText);
@@ -1733,14 +802,9 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
 
     auto snapEven = [] (int v) { return v & ~1; };
 
-    const int buttonsTop = getAlertButtonsTop (aw);
-
     const int contentLeft = kPromptInnerMargin;
-    const int contentTop = kPromptBodyTopPad;
     const int contentRight = aw.getWidth() - kPromptInnerMargin;
-    const int contentBottom = buttonsTop - kPromptBodyBottomPad;
     const int contentW = juce::jmax (0, contentRight - contentLeft);
-    const int contentH = juce::jmax (0, contentBottom - contentTop);
 
     auto* dfltToggle = dynamic_cast<juce::ToggleButton*> (aw.findChildWithID ("paletteDefaultToggle"));
     auto* dfltLabel  = dynamic_cast<juce::Label*> (aw.findChildWithID ("paletteDefaultLabel"));
@@ -1761,22 +825,27 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
 
     const int toggleVisualSide = juce::jlimit (14,
                                                juce::jmax (14, toggleBox - 2),
-                                               (int) std::lround ((double) toggleBox * 0.50));
+                                               (int) std::lround ((double) toggleBox * 0.65));
 
-    const int swatchGroupSize = (2 * swatchSize) + swatchGap;
-    const int swatchesH = swatchGroupSize;
+    const int swatchW = swatchSize;
+    const int swatchH = (2 * swatchSize) + swatchGap;
+    const int swatchGroupSize = (2 * swatchW) + swatchGap;
+    const int swatchesH = swatchH;
     const int modeH = toggleBox;
 
     const int baseGap1 = GraphicsPromptLayout::titleToModeGap;
     const int baseGap2 = GraphicsPromptLayout::modeToSwatchesGap;
-    const int stackHNoTopBottom = titleH + baseGap1 + modeH + baseGap2 + swatchesH;
-    const int centeredYStart = snapEven (contentTop + juce::jmax (0, (contentH - stackHNoTopBottom) / 2));
-    const int symmetricTopMargin = kPromptFooterBottomPad;
-    const bool hasBodyTitle = (paletteTitle != nullptr);
-    const int yStart = hasBodyTitle ? snapEven (symmetricTopMargin) : centeredYStart;
 
-    const int titleY = yStart;
-    const int modeY = snapEven (titleY + titleH + baseGap1);
+    const int titleY = snapEven (kPromptFooterBottomPad);
+    const int footerY = getAlertButtonsTop (aw);
+
+    const int bodyH = modeH + baseGap2 + swatchesH;
+    const int bodyZoneTop = titleY + titleH + baseGap1;
+    const int bodyZoneBottom = footerY - baseGap1;
+    const int bodyZoneH = juce::jmax (0, bodyZoneBottom - bodyZoneTop);
+    const int bodyY = snapEven (bodyZoneTop + juce::jmax (0, (bodyZoneH - bodyH) / 2));
+
+    const int modeY = bodyY;
     const int blocksY = snapEven (modeY + modeH + baseGap2);
 
     const int dfltLabelW = (dfltLabel != nullptr) ? juce::jmax (38, stringWidth (dfltLabel->getFont(), "DFLT") + 2) : 40;
@@ -1807,10 +876,7 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     if (paletteTitle != nullptr)
     {
         const int paletteW = juce::jmax (100, juce::jmin (leftColumnW, contentRight - col0X));
-        paletteTitle->setBounds (col0X,
-                                 titleY,
-                                 paletteW,
-                                 titleH);
+        paletteTitle->setBounds (col0X, titleY, paletteW, titleH);
     }
 
     if (dfltToggle != nullptr)   dfltToggle->setBounds (dfltX, modeY, toggleBox, toggleBox);
@@ -1822,16 +888,14 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     {
         const int startY = blocksY;
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 2; ++i)
         {
             if (auto* b = dynamic_cast<juce::TextButton*> (aw.findChildWithID (prefix + juce::String (i))))
             {
-                const int col = i % 2;
-                const int row = i / 2;
-                b->setBounds (startX + col * (swatchSize + swatchGap),
-                              startY + row * (swatchSize + swatchGap),
-                              swatchSize,
-                              swatchSize);
+                b->setBounds (startX + i * (swatchW + swatchGap),
+                              startY,
+                              swatchW,
+                              swatchH);
             }
         }
     };
@@ -1839,19 +903,17 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     placeSwatchGroup ("defaultSwatch", defaultSwatchStartX);
     placeSwatchGroup ("customSwatch", customSwatchStartX);
 
-    if (auto* okButton = aw.getNumButtons() > 0 ? aw.getButton (0) : nullptr)
+    if (okBtn != nullptr)
     {
-        if (okButton != nullptr)
-        {
-            auto okR = okButton->getBounds();
-            okR.setX (col1X);
-            okButton->setBounds (okR);
+        auto okR = okBtn->getBounds();
+        okR.setX (col1X);
+        okR.setY (footerY);
+        okBtn->setBounds (okR);
 
-                const int fxY = snapEven (okR.getY() + juce::jmax (0, (okR.getHeight() - toggleBox) / 2));
-                const int fxX = col0X;
-                if (fxToggle != nullptr) fxToggle->setBounds (fxX, fxY, toggleBox, toggleBox);
-                if (fxLabel != nullptr)  fxLabel->setBounds (fxX + toggleLabelStartOffset, fxY, fxLabelW, toggleBox);
-            }
+        const int fxY = snapEven (footerY + juce::jmax (0, (okR.getHeight() - toggleBox) / 2));
+        const int fxX = col0X;
+        if (fxToggle != nullptr) fxToggle->setBounds (fxX, fxY, toggleBox, toggleBox);
+        if (fxLabel != nullptr)  fxLabel->setBounds (fxX + toggleLabelStartOffset, fxY, fxLabelW, toggleBox);
     }
 
     auto updateVisualBounds = [] (juce::Component* c, int& minX, int& maxR)
@@ -1876,7 +938,7 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
     updateVisualBounds (fxLabel, visualMinX, visualMaxR);
     updateVisualBounds (okBtn, visualMinX, visualMaxR);
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 2; ++i)
     {
         updateVisualBounds (aw.findChildWithID ("defaultSwatch" + juce::String (i)), visualMinX, visualMaxR);
         updateVisualBounds (aw.findChildWithID ("customSwatch" + juce::String (i)), visualMinX, visualMaxR);
@@ -1914,131 +976,165 @@ static void layoutGraphicsPopupContent (juce::AlertWindow& aw)
             shiftX (fxLabel);
             shiftX (okBtn);
 
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 2; ++i)
             {
                 shiftX (aw.findChildWithID ("defaultSwatch" + juce::String (i)));
                 shiftX (aw.findChildWithID ("customSwatch" + juce::String (i)));
             }
         }
     }
+}
 
+static void layoutInfoPopupContent (juce::AlertWindow& aw)
+{
+    layoutAlertWindowButtons (aw);
+
+    const int contentTop = kPromptBodyTopPad;
+    const int contentBottom = getAlertButtonsTop (aw) - kPromptBodyBottomPad;
+    const int contentH = juce::jmax (0, contentBottom - contentTop);
+    const int bodyW = aw.getWidth() - (2 * kPromptInnerMargin);
+
+    // Find the viewport that wraps all body content
+    auto* viewport = dynamic_cast<juce::Viewport*> (aw.findChildWithID ("bodyViewport"));
+    if (viewport == nullptr)
+        return;
+
+    viewport->setBounds (kPromptInnerMargin, contentTop, bodyW, contentH);
+
+    auto* content = viewport->getViewedComponent();
+    if (content == nullptr)
+        return;
+
+    // Layout children inside content component top-to-bottom
+    constexpr int kItemGap = 10;
+    int y = 0;
+    const int innerW = bodyW - 10;  // leave room for scrollbar
+
+    for (int i = 0; i < content->getNumChildComponents(); ++i)
+    {
+        auto* child = content->getChildComponent (i);
+        if (child == nullptr || ! child->isVisible())
+            continue;
+
+        // Labels measure preferred height from font
+        int itemH = 30;
+        if (auto* label = dynamic_cast<juce::Label*> (child))
+        {
+            auto font = label->getFont();
+            const auto text = label->getText();
+            const auto border = label->getBorderSize();
+
+            // Single-line labels (no newlines): use font height directly
+            if (! text.containsChar ('\n'))
+            {
+                itemH = (int) std::ceil (font.getHeight()) + border.getTopAndBottom();
+            }
+            else
+            {
+                // Multi-line: measure with TextLayout
+                juce::AttributedString as;
+                as.append (text, font, label->findColour (juce::Label::textColourId));
+                as.setJustification (label->getJustificationType());
+                juce::TextLayout layout;
+                const int textAreaW = innerW - border.getLeftAndRight();
+                layout.createLayout (as, (float) juce::jmax (1, textAreaW));
+                itemH = juce::jmax (20, (int) std::ceil (layout.getHeight()
+                                                         + font.getDescent())
+                                        + border.getTopAndBottom() + 4);
+            }
+        }
+        else if (dynamic_cast<juce::HyperlinkButton*> (child) != nullptr)
+        {
+            itemH = 28;
+        }
+
+        child->setBounds (0, y, innerW, itemH);
+
+        // ── Poem auto-fit: if text overflows with padding, shrink font ──
+        if (auto* label = dynamic_cast<juce::Label*> (child))
+        {
+            const auto& props = label->getProperties();
+            if (props.contains ("poemPadFraction"))
+            {
+                const float padFrac = (float) props["poemPadFraction"];
+                const int padPx = juce::jmax (4, (int) std::round (innerW * padFrac));
+                label->setBorderSize (juce::BorderSize<int> (0, padPx, 0, padPx));
+
+                // Check if text fits; if not, shrink font until it does (min 65% scale)
+                auto font = label->getFont();
+                const int textAreaW = innerW - 2 * padPx;
+                for (float scale = 1.0f; scale >= 0.65f; scale -= 0.025f)
+                {
+                    font.setHorizontalScale (scale);
+                    juce::GlyphArrangement glyphs;
+                    glyphs.addLineOfText (font, label->getText(), 0.0f, 0.0f);
+                    if (static_cast<int> (std::ceil (glyphs.getBoundingBox (0, -1, false).getWidth())) <= textAreaW)
+                        break;
+                }
+                label->setFont (font);
+            }
+        }
+
+        y += itemH + kItemGap;
+    }
+
+    // Remove trailing gap
+    if (y > kItemGap)
+        y -= kItemGap;
+
+    content->setSize (innerW, juce::jmax (contentH, y));
 }
 
 void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider& s)
 {
-    // make sure the LNF is using the current scheme in case it changed
-    lnf.setScheme (schemes[(size_t) currentSchemeIndex]);
+    lnf.setScheme (activeScheme);
 
-    // grab a local copy, we will use its raw colours below to bypass
-    // any host/LNF oddities that might creep in
-    const auto scheme = schemes[(size_t) currentSchemeIndex];
+    const auto scheme = activeScheme;
 
-    // decide what suffix label should appear; we want *separate* text that
-    // is not part of the editable field. use the full nomenclature from the
-    // helpers (long form) rather than the previous abbreviations.
     juce::String suffix;
-    if (&s == &amountSlider)         suffix = " STAGES";
-    else if (&s == &seriesSlider)    suffix = " SERIES";
-    else if (&s == &freqSlider)      suffix = " HZ";
-    else if (&s == &shapeSlider) suffix = " % SHAPE";
+    juce::String suffixShort;
+    const bool isPercentPrompt = (&s == &shapeSlider);
+
+    if (&s == &amountSlider)       { suffix = " STAGES";  suffixShort = " STG"; }
+    else if (&s == &seriesSlider)  { suffix = " SERIES";  suffixShort = " SRS"; }
+    else if (&s == &freqSlider)    { suffix = " HZ";      suffixShort = " HZ"; }
+    else if (&s == &shapeSlider)   { suffix = " % SHAPE"; suffixShort = " %"; }
+
     const juce::String suffixText = suffix.trimStart();
-    const bool isShapePrompt = (&s == &shapeSlider);
+    const juce::String suffixTextShort = suffixShort.trimStart();
 
-    // Sin texto de prompt: solo input + OK/Cancel
     auto* aw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
-
-    // enforce our custom look&feel; hosts often reset dialogs to their own LNF
     aw->setLookAndFeel (&lnf);
 
-    const auto current = s.getTextFromValue (s.getValue());
-    aw->addTextEditor ("val", current, juce::String()); // sin label
+    juce::String currentDisplay;
+    if (&s == &amountSlider)
+        currentDisplay = juce::String ((int) s.getValue());
+    else if (&s == &seriesSlider)
+        currentDisplay = juce::String ((int) s.getValue());
+    else if (&s == &freqSlider)
+        currentDisplay = juce::String (s.getValue(), 3);
+    else if (&s == &shapeSlider)
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 4);
+    else
+        currentDisplay = s.getTextFromValue (s.getValue());
 
-    // we will create a label just to the right of the editor showing the suffix
+    aw->addTextEditor ("val", currentDisplay, juce::String());
+
     juce::Label* suffixLabel = nullptr;
-
-    // increase the font size for legibility rather than resizing the field
-    // we already have a helper up near the top of this file that uses
-    // GlyphArrangement to measure text. reuse that instead of TextLayout.
-    // (stringWidth(font, text))
-
-    // adaptable filter for numeric input: clamps length, number of decimals and
-    // optionally a value range. the returned string is the permitted version of
-    // whatever the user typed.
-    struct NumericInputFilter  : juce::TextEditor::InputFilter
-    {
-        double minVal, maxVal;
-        int maxLen, maxDecimals;
-        bool isShape = false;
-
-                NumericInputFilter (double minV, double maxV,
-                                                        int maxLength, int maxDecs, bool isShapeValue = false)
-            : minVal (minV), maxVal (maxV),
-                            maxLen (maxLength), maxDecimals (maxDecs), isShape (isShapeValue) {}
-
-        juce::String filterNewText (juce::TextEditor& editor,
-                                    const juce::String& newText) override
-        {
-            bool seenDot = false;
-            int decimals = 0;
-            juce::String result;
-
-            for (auto c : newText)
-            {
-                if (c == '.')
-                {
-                    if (seenDot || maxDecimals == 0)
-                        continue;
-                    seenDot = true;
-                    result += c;
-                }
-                else if (juce::CharacterFunctions::isDigit (c))
-                {
-                    if (seenDot) ++decimals;
-                    if (decimals > maxDecimals)
-                        break;
-                    result += c;
-                }
-                else if ((c == '+' || c == '-') && result.isEmpty())
-                {
-                    result += c;
-                }
-
-                if (maxLen > 0 && result.length() >= maxLen)
-                    break;
-            }
-
-            // now check the numeric value if the new text were inserted
-            juce::String proposed = editor.getText();
-            int insertPos = editor.getCaretPosition();
-            proposed = proposed.substring (0, insertPos) + result
-                     + proposed.substring (insertPos + editor.getHighlightedText().length());
-
-            double val = proposed.replaceCharacter(',', '.').getDoubleValue();
-            if (val > maxVal)
-                return juce::String(); // reject insertion that exceeds limit
-
-            return result;
-        }
-    };
-
     juce::Rectangle<int> editorBaseBounds;
     std::function<void()> layoutValueAndSuffix;
 
     if (auto* te = aw->getTextEditor ("val"))
     {
-        auto f = lnf.getAlertWindowMessageFont();
-        f.setHeight (f.getHeight() * 1.5f);
+        const auto& f = kBoldFont40();
         te->setFont (f);
         te->applyFontToAllText (f);
 
-        // ensure the editor is tall enough to contain the larger text
         auto r = te->getBounds();
-        r.setHeight ((int) (f.getHeight() * 1.4f) + 6);
-        r.setY (juce::jmax (6, r.getY() - 8));
+        r.setHeight ((int) (f.getHeight() * kPromptEditorHeightScale) + kPromptEditorHeightPadPx);
+        r.setY (juce::jmax (kPromptEditorMinTopPx, r.getY() - kPromptEditorRaiseYPx));
         editorBaseBounds = r;
 
-        // create & position the suffix label; it's non-editable and won't
-        // be selected when the user highlights the value.
         suffixLabel = new juce::Label ("suffix", suffixText);
         suffixLabel->setComponentID (kPromptSuffixLabelId);
         suffixLabel->setJustificationType (juce::Justification::centredLeft);
@@ -2047,14 +1143,38 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         suffixLabel->setFont (f);
         aw->addAndMakeVisible (suffixLabel);
 
-        layoutValueAndSuffix = [aw, te, suffixLabel, editorBaseBounds, isShapePrompt]()
+        juce::String worstCaseText;
+        if (&s == &amountSlider)       worstCaseText = "256";
+        else if (&s == &seriesSlider)  worstCaseText = "4";
+        else if (&s == &freqSlider)    worstCaseText = "20000.000";
+        else if (&s == &shapeSlider)   worstCaseText = "100.0000";
+        else                           worstCaseText = "999.99";
+
+        const int maxInputTextW = juce::jmax (1, stringWidth (f, worstCaseText));
+
+        layoutValueAndSuffix = [aw, te, suffixLabel, editorBaseBounds, isPercentPrompt, suffixText, suffixTextShort, maxInputTextW]()
         {
-            int labelW = stringWidth (suffixLabel->getFont(), suffixLabel->getText()) + 2;
-            auto er = te->getBounds();
+            const int contentPad = kPromptInlineContentPadPx;
+            const int contentLeft = contentPad;
+            const int contentRight = (aw != nullptr ? aw->getWidth() - contentPad : editorBaseBounds.getRight());
+            const int availableW = contentRight - contentLeft;
+            const int contentCenter = (contentLeft + contentRight) / 2;
+
+            const int fullLabelW = stringWidth (suffixLabel->getFont(), suffixText) + 2;
+            const bool stickPercentFull = suffixText.containsChar ('%');
+            const int spaceWFull = stickPercentFull ? 0 : juce::jmax (2, stringWidth (suffixLabel->getFont(), " "));
+            const int worstCaseFullW = maxInputTextW + spaceWFull + fullLabelW;
+
+            const bool useShort = (worstCaseFullW > availableW) && suffixTextShort != suffixText;
+            const juce::String& activeSuffix = useShort ? suffixTextShort : suffixText;
+            suffixLabel->setText (activeSuffix, juce::dontSendNotification);
 
             const auto txt = te->getText();
             const int textW = juce::jmax (1, stringWidth (te->getFont(), txt));
-            const bool stickPercentToValue = suffixLabel->getText().startsWithChar ('%');
+            int labelW = stringWidth (suffixLabel->getFont(), activeSuffix) + 2;
+            auto er = te->getBounds();
+
+            const bool stickPercentToValue = activeSuffix.containsChar ('%');
             const int spaceW = stickPercentToValue ? 0 : juce::jmax (2, stringWidth (te->getFont(), " "));
             const int minGapPx = juce::jmax (1, spaceW);
 
@@ -2066,11 +1186,6 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             er.setWidth (editorW);
 
             const int combinedW = textW + minGapPx + labelW;
-
-            const int contentPad = kPromptInlineContentPadPx;
-            const int contentLeft = contentPad;
-            const int contentRight = (aw != nullptr ? aw->getWidth() - contentPad : editorBaseBounds.getRight());
-            const int contentCenter = (contentLeft + contentRight) / 2;
 
             int blockLeft = contentCenter - (combinedW / 2);
             const int minBlockLeft = contentLeft;
@@ -2091,25 +1206,18 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             const int maxLabelX = juce::jmax (minLabelX, contentRight - labelW);
             labelX = juce::jlimit (minLabelX, maxLabelX, labelX);
 
-            const int vInset = kPromptSuffixVInsetPx;
-            const int baselineOffset = isShapePrompt ? kPromptSuffixBaselineShapePx : kPromptSuffixBaselineDefaultPx;
-            const int labelY = er.getY() + vInset + baselineOffset;
-            const int labelH = juce::jmax (1, er.getHeight() - (vInset * 2) - baselineOffset);
+            const int labelY = er.getY();
+            const int labelH = juce::jmax (1, er.getHeight());
             suffixLabel->setBounds (labelX, labelY, labelW, labelH);
         };
 
-        // our reposition function will place the label; keep the editor at its
-        // original width (no further shrink needed here). we still set the
-        // bounds now so that later reposition() can rely on r's coordinates.
         te->setBounds (editorBaseBounds);
         int labelW0 = stringWidth (suffixLabel->getFont(), suffixText) + 2;
         suffixLabel->setBounds (r.getRight() + 2, r.getY() + 1, labelW0, juce::jmax (1, r.getHeight() - 2));
 
-        // initial placement (label anchored to right)
         if (layoutValueAndSuffix)
             layoutValueAndSuffix();
 
-        // choose limits depending on the slider being edited
         double minVal = 0.0, maxVal = 1.0;
         int maxLen = 0, maxDecs = 4;
 
@@ -2117,43 +1225,40 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         {
             maxVal = 256.0;
             maxDecs = 0;
-            maxLen = 3; // up to "256"
+            maxLen = 3;
         }
         else if (&s == &seriesSlider)
         {
             maxVal = 4.0;
             maxDecs = 0;
-            maxLen = 1; // "4"
+            maxLen = 1;
         }
         else if (&s == &freqSlider)
         {
             maxVal = 20000.0;
             maxDecs = 3;
-            maxLen = 9; // "20000.000" (5 digits + dot + 3)
+            maxLen = 9;
         }
         else if (&s == &shapeSlider)
         {
             minVal = 0.0;
-            maxVal = 100.0;    // user types percent
+            maxVal = 100.0;
             maxDecs = 4;
-            maxLen = 8; // "100.0000" (3 digits + dot + 4)
+            maxLen = 8;
         }
 
-        bool isShape = (&s == &shapeSlider);
-        const bool isFreq = (&s == &freqSlider);
-        te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs, isShape), true);
+        te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs), true);
 
-        // limit text to four decimals and move the suffix when text changes
-        te->onTextChange = [te, layoutValueAndSuffix, isFreq]() mutable
+        const int localMaxDecs = maxDecs;
+        te->onTextChange = [te, layoutValueAndSuffix, localMaxDecs]() mutable
         {
             auto txt = te->getText();
             int dot = txt.indexOfChar('.');
             if (dot >= 0)
             {
                 int decimals = txt.length() - dot - 1;
-                const int maxDecimals = isFreq ? 3 : 4;
-                if (decimals > maxDecimals)
-                    te->setText (txt.substring (0, dot + 1 + maxDecimals), juce::dontSendNotification);
+                if (decimals > localMaxDecs)
+                    te->setText (txt.substring (0, dot + 1 + localMaxDecs), juce::dontSendNotification);
             }
             if (layoutValueAndSuffix)
                 layoutValueAndSuffix();
@@ -2165,20 +1270,16 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     applyPromptShellSize (*aw);
     layoutAlertWindowButtons (*aw);
 
-    // We can't call lookAndFeelChanged() on AlertWindow (it's protected),
-    // so just rely on calling setLookAndFeel() twice instead.
+    const juce::Font& kPromptFont = kBoldFont40();
 
     preparePromptTextEditor (*aw,
                              "val",
                              scheme.bg,
                              scheme.text,
                              scheme.fg,
-                             lnf.getAlertWindowMessageFont(),
-                             false,
-                             6);
+                             kPromptFont,
+                             false);
 
-    // Force initial suffix placement with final editor metrics so the first
-    // frame does not show a vertical offset.
     if (suffixLabel != nullptr && ! editorBaseBounds.isEmpty())
     {
         if (auto* te = aw->getTextEditor ("val"))
@@ -2187,26 +1288,13 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             layoutValueAndSuffix();
     }
 
-    // style buttons as well – some hosts stomp them when the window is added
-    for (int i = 0; i < aw->getNumButtons(); ++i)
-    {
-        if (auto* btn = dynamic_cast<juce::TextButton*>(aw->getButton (i)))
-        {
-            btn->setColour (juce::TextButton::buttonColourId,   lnf.findColour (juce::TextButton::buttonColourId));
-            btn->setColour (juce::TextButton::buttonOnColourId, lnf.findColour (juce::TextButton::buttonOnColourId));
-            btn->setColour (juce::TextButton::textColourOffId,  lnf.findColour (juce::TextButton::textColourOffId));
-            btn->setColour (juce::TextButton::textColourOnId,   lnf.findColour (juce::TextButton::textColourOnId));
-            // font is provided by the look-and-feel already; avoid calling setFont
-        }
-    }
+    styleAlertButtons (*aw, lnf);
 
     juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThis (this);
     juce::Slider* sliderPtr = &s;
 
     setPromptOverlayActive (true);
 
-    // re-assert our look&feel in case the host modified it when
-    // adding the window to the desktop.
     aw->setLookAndFeel (&lnf);
 
     if (safeThis != nullptr)
@@ -2221,9 +1309,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
                                      scheme.bg,
                                      scheme.text,
                                      scheme.fg,
-                                     lnf.getAlertWindowMessageFont(),
-                                     false,
-                                     6);
+                                     kPromptFont,
+                                     false);
         });
 
         embedAlertWindowInOverlay (safeThis.getComponent(), aw);
@@ -2235,27 +1322,23 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         aw->repaint();
     }
 
-    // Apply larger font and final layout synchronously so the prompt is
-    // fully laid out before being shown (avoids a small delayed re-layout).
     {
-        auto bigFont = lnf.getAlertWindowMessageFont();
-        bigFont.setHeight (bigFont.getHeight() * 1.5f);
         preparePromptTextEditor (*aw,
                                  "val",
                                  scheme.bg,
                                  scheme.text,
                                  scheme.fg,
-                                 bigFont,
-                                 false,
-                                 6);
+                                 kPromptFont,
+                                 false);
         if (auto* suffixLbl = dynamic_cast<juce::Label*> (aw->findChildWithID (kPromptSuffixLabelId)))
-            suffixLbl->setFont (bigFont);
+        {
+            if (auto* te = aw->getTextEditor ("val"))
+                suffixLbl->setFont (te->getFont());
+        }
 
         if (layoutValueAndSuffix)
             layoutValueAndSuffix();
 
-        // Keep a lightweight async fallback that only ensures the window is
-        // on top and repainted — avoid re-running layout to prevent visible jumps.
         juce::Component::SafePointer<juce::AlertWindow> safeAw (aw);
         juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThisPtr (this);
         juce::MessageManager::callAsync ([safeAw, safeThisPtr]()
@@ -2290,7 +1373,6 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             const juce::String numericToken = t.initialSectionContainingOnly ("0123456789.,-");
             double v = numericToken.getDoubleValue();
 
-            // user typed percent for shape; convert to slider's [0,1] range
             if (safeThis != nullptr && sliderPtr == &safeThis->shapeSlider)
                 v *= 0.01;
 
@@ -2308,7 +1390,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
 
 void DisperserAudioProcessorEditor::openInfoPopup()
 {
-    lnf.setScheme (schemes[(size_t) currentSchemeIndex]);
+    lnf.setScheme (activeScheme);
 
     setPromptOverlayActive (true);
 
@@ -2321,30 +1403,105 @@ void DisperserAudioProcessorEditor::openInfoPopup()
 
     applyPromptShellSize (*aw);
 
-    auto* infoLabel = new juce::Label ("infoText", "NMSTR -> INFO SOON");
-    infoLabel->setComponentID ("infoText");
-    infoLabel->setJustificationType (juce::Justification::centred);
-    applyLabelTextColour (*infoLabel, schemes[(size_t) currentSchemeIndex].text);
+    // ── Body content: parsed from InfoContent.h XML ──
+    auto* bodyContent = new juce::Component();
+    bodyContent->setComponentID ("bodyContent");
+
     auto infoFont = lnf.getAlertWindowMessageFont();
     infoFont.setHeight (infoFont.getHeight() * 1.45f);
-    infoLabel->setFont (infoFont);
-    aw->addAndMakeVisible (infoLabel);
 
-    auto* infoLink = new juce::HyperlinkButton ("GitHub Repository",
-                                                juce::URL ("https://github.com/lmaser/DISP-TR"));
-    infoLink->setComponentID ("infoLink");
-    infoLink->setJustificationType (juce::Justification::centred);
-    infoLink->setColour (juce::HyperlinkButton::textColourId,
-                         schemes[(size_t) currentSchemeIndex].text);
+    auto headingFont = infoFont;
+    headingFont.setBold (true);
+    headingFont.setHeight (infoFont.getHeight() * 1.25f);
+
     auto linkFont = infoFont;
-    linkFont.setHeight (infoFont.getHeight() * 0.72f);
-    infoLink->setFont (linkFont, false, juce::Justification::centred);
-    aw->addAndMakeVisible (infoLink);
+    linkFont.setHeight (infoFont.getHeight() * 1.08f);
+
+    auto poemFont = infoFont;
+    poemFont.setItalic (true);
+
+    // Parse the XML content from InfoContent.h
+    auto xmlDoc = juce::XmlDocument::parse (InfoContent::xml);
+    auto* contentNode = xmlDoc != nullptr ? xmlDoc->getChildByName ("content") : nullptr;
+
+    if (contentNode != nullptr)
+    {
+        int elemIdx = 0;
+        for (auto* node : contentNode->getChildIterator())
+        {
+            const auto tag  = node->getTagName();
+            const auto text = node->getAllSubText().trim();
+            const auto id   = tag + juce::String (elemIdx++);
+
+            if (tag == "heading")
+            {
+                auto* l = new juce::Label (id, text);
+                l->setComponentID (id);
+                l->setJustificationType (juce::Justification::centred);
+                applyLabelTextColour (*l, activeScheme.text);
+                l->setFont (headingFont);
+                bodyContent->addAndMakeVisible (l);
+            }
+            else if (tag == "text" || tag == "separator")
+            {
+                auto* l = new juce::Label (id, text);
+                l->setComponentID (id);
+                l->setJustificationType (juce::Justification::centred);
+                applyLabelTextColour (*l, activeScheme.text);
+                l->setFont (infoFont);
+                l->setBorderSize (juce::BorderSize<int> (0));
+                bodyContent->addAndMakeVisible (l);
+            }
+            else if (tag == "link")
+            {
+                const auto url = node->getStringAttribute ("url");
+                auto* lnk = new juce::HyperlinkButton (text, juce::URL (url));
+                lnk->setComponentID (id);
+                lnk->setJustificationType (juce::Justification::centred);
+                lnk->setColour (juce::HyperlinkButton::textColourId, activeScheme.text);
+                lnk->setFont (linkFont, false, juce::Justification::centred);
+                lnk->setTooltip ("");
+                bodyContent->addAndMakeVisible (lnk);
+            }
+            else if (tag == "poem")
+            {
+                auto* l = new juce::Label (id, text);
+                l->setComponentID (id);
+                l->setJustificationType (juce::Justification::centred);
+                applyLabelTextColour (*l, activeScheme.text);
+                l->setFont (poemFont);
+                l->setBorderSize (juce::BorderSize<int> (0, 0, 0, 0));
+                l->getProperties().set ("poemPadFraction", 0.12f);
+                bodyContent->addAndMakeVisible (l);
+            }
+            else if (tag == "spacer")
+            {
+                auto* l = new juce::Label (id, "");
+                l->setComponentID (id);
+                l->setFont (infoFont);
+                l->setBorderSize (juce::BorderSize<int> (0));
+                bodyContent->addAndMakeVisible (l);
+            }
+        }
+    }
+
+    auto* viewport = new juce::Viewport();
+    viewport->setComponentID ("bodyViewport");
+    viewport->setViewedComponent (bodyContent, true);  // viewport owns bodyContent
+    viewport->setScrollBarsShown (true, false);         // vertical only
+    viewport->setScrollBarThickness (8);
+    viewport->setLookAndFeel (&lnf);
+    aw->addAndMakeVisible (viewport);
 
     layoutInfoPopupContent (*aw);
 
     if (safeThis != nullptr)
     {
+        fitAlertWindowToEditor (*aw, safeThis.getComponent(), [] (juce::AlertWindow& a)
+        {
+            layoutInfoPopupContent (a);
+        });
+
         embedAlertWindowInOverlay (safeThis.getComponent(), aw);
     }
     else
@@ -2359,11 +1516,7 @@ void DisperserAudioProcessorEditor::openInfoPopup()
         if (safeAw == nullptr || safeThis == nullptr)
             return;
 
-        safeAw->centreAroundComponent (safeThis.getComponent(), safeAw->getWidth(), safeAw->getHeight());
         bringPromptWindowToFront (*safeAw);
-
-        layoutInfoPopupContent (*safeAw);
-
         safeAw->repaint();
     });
 
@@ -2387,10 +1540,11 @@ void DisperserAudioProcessorEditor::openInfoPopup()
 
 void DisperserAudioProcessorEditor::openGraphicsPopup()
 {
-    lnf.setScheme (schemes[(size_t) currentSchemeIndex]);
+    lnf.setScheme (activeScheme);
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
-    fxTailEnabled = audioProcessor.getUiFxTailEnabled();
+    crtEnabled = audioProcessor.getUiFxTailEnabled();
+    crtEffect.setEnabled (crtEnabled);
     applyActivePalette();
 
     setPromptOverlayActive (true);
@@ -2412,26 +1566,12 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
         auto* label = new PopupClickableLabel (id, text);
         label->setComponentID (id);
         label->setJustificationType (justification);
-        applyLabelTextColour (*label, schemes[(size_t) currentSchemeIndex].text);
+        applyLabelTextColour (*label, activeScheme.text);
         label->setBorderSize (juce::BorderSize<int> (0));
         label->setFont (font);
         label->setMouseCursor (juce::MouseCursor::PointingHandCursor);
         aw->addAndMakeVisible (label);
         return label;
-    };
-
-    auto stylePromptButtons = [this] (juce::AlertWindow& alert)
-    {
-        for (int bi = 0; bi < alert.getNumButtons(); ++bi)
-        {
-            if (auto* btn = dynamic_cast<juce::TextButton*> (alert.getButton (bi)))
-            {
-                btn->setColour (juce::TextButton::buttonColourId,   lnf.findColour (juce::TextButton::buttonColourId));
-                btn->setColour (juce::TextButton::buttonOnColourId, lnf.findColour (juce::TextButton::buttonOnColourId));
-                btn->setColour (juce::TextButton::textColourOffId,  lnf.findColour (juce::TextButton::textColourOffId));
-                btn->setColour (juce::TextButton::textColourOnId,   lnf.findColour (juce::TextButton::textColourOnId));
-            }
-        }
     };
 
     auto* defaultToggle = new juce::ToggleButton ("");
@@ -2450,7 +1590,7 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
     paletteTitleFont.setHeight (paletteTitleFont.getHeight() * 1.30f);
     addPopupLabel ("paletteTitle", "PALETTE", paletteTitleFont, juce::Justification::centredLeft);
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 2; ++i)
     {
         auto* dflt = new juce::TextButton();
         dflt->setComponentID ("defaultSwatch" + juce::String (i));
@@ -2465,19 +1605,19 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
 
     auto* fxToggle = new juce::ToggleButton ("");
     fxToggle->setComponentID ("fxToggle");
-    fxToggle->setToggleState (fxTailEnabled, juce::dontSendNotification);
+    fxToggle->setToggleState (crtEnabled, juce::dontSendNotification);
     fxToggle->onClick = [safeThis, fxToggle]()
     {
         if (safeThis == nullptr || fxToggle == nullptr)
             return;
 
-        safeThis->fxTailEnabled = fxToggle->getToggleState();
-        safeThis->audioProcessor.setUiFxTailEnabled (safeThis->fxTailEnabled);
+        safeThis->applyCrtState (fxToggle->getToggleState());
+        safeThis->audioProcessor.setUiFxTailEnabled (safeThis->crtEnabled);
         safeThis->repaint();
     };
     aw->addAndMakeVisible (fxToggle);
 
-    auto* fxLabel = addPopupLabel ("fxLabel", "TEXT FX", labelFont);
+    auto* fxLabel = addPopupLabel ("fxLabel", "GRAPHIC FX", labelFont);
 
     auto syncAndRepaintPopup = [safeThis, safeAw]()
     {
@@ -2533,7 +1673,7 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
     if (fxLabel != nullptr && fxToggle != nullptr)
         fxLabel->onClick = [fxToggle]() { fxToggle->triggerClick(); };
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 2; ++i)
     {
         if (auto* customSwatch = dynamic_cast<PopupSwatchButton*> (aw->findChildWithID ("customSwatch" + juce::String (i))))
         {
@@ -2563,30 +1703,36 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
                 }
             };
 
-            customSwatch->onRightClick = [safeThis, safeAw, i, stylePromptButtons]()
+            customSwatch->onRightClick = [safeThis, safeAw, i]()
             {
                 if (safeThis == nullptr)
                     return;
 
-                const auto scheme = safeThis->schemes[(size_t) safeThis->currentSchemeIndex];
+                const auto scheme = safeThis->activeScheme;
 
                 auto* colorAw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
                 colorAw->setLookAndFeel (&safeThis->lnf);
                 colorAw->addTextEditor ("hex", colourToHexRgb (safeThis->customPalette[(size_t) i]), juce::String());
+
+                if (auto* te = colorAw->getTextEditor ("hex"))
+                    te->setInputFilter (new HexInputFilter(), true);
+
                 colorAw->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
                 colorAw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
 
-                stylePromptButtons (*colorAw);
+                styleAlertButtons (*colorAw, safeThis->lnf);
 
                 applyPromptShellSize (*colorAw);
                 layoutAlertWindowButtons (*colorAw);
+
+                const juce::Font& kHexPromptFont = kBoldFont40();
 
                 preparePromptTextEditor (*colorAw,
                                          "hex",
                                          scheme.bg,
                                          scheme.text,
                                          scheme.fg,
-                                         safeThis->lnf.getAlertWindowMessageFont(),
+                                         kHexPromptFont,
                                          true,
                                          6);
 
@@ -2600,7 +1746,7 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
                                                  scheme.bg,
                                                  scheme.text,
                                                  scheme.fg,
-                                                 safeThis->lnf.getAlertWindowMessageFont(),
+                                                 kHexPromptFont,
                                                  true,
                                                  6);
                     });
@@ -2616,19 +1762,15 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
                     colorAw->repaint();
                 }
 
-                // Synchronously ensure prompt text editor styling is applied so
-                // the prompt appears correctly before being shown.
                 preparePromptTextEditor (*colorAw,
                                          "hex",
                                          scheme.bg,
                                          scheme.text,
                                          scheme.fg,
-                                         safeThis->lnf.getAlertWindowMessageFont(),
+                                         kHexPromptFont,
                                          true,
                                          6);
 
-                // Lightweight async: ensure window is on top and repainted,
-                // but avoid re-applying layout synchronously to prevent jumps.
                 juce::Component::SafePointer<juce::AlertWindow> safeColorAw (colorAw);
                 juce::MessageManager::callAsync ([safeColorAw]()
                 {
@@ -2675,9 +1817,6 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
     syncGraphicsPopupState (*aw, defaultPalette, customPalette, useCustomPalette);
     layoutGraphicsPopupContent (*aw);
 
-    // If we're embedding the prompt inside the editor and the editor is
-    // narrower than the default prompt width, shrink the prompt to fit and
-    // re-run the layout so nothing is positioned outside the visible area.
     if (safeThis != nullptr)
     {
         fitAlertWindowToEditor (*aw, safeThis.getComponent(), [&] (juce::AlertWindow& a)
@@ -2695,8 +1834,6 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
             if (safeAw == nullptr || safeThis == nullptr)
                 return;
 
-            syncGraphicsPopupState (*safeAw, safeThis->defaultPalette, safeThis->customPalette, safeThis->useCustomPalette);
-            layoutGraphicsPopupContent (*safeAw);
             safeAw->toFront (false);
             safeAw->repaint();
         });
@@ -2788,85 +1925,78 @@ namespace
     constexpr int kValueAreaHeightPx = 44;
     constexpr int kValueAreaRightMarginPx = 24;
     constexpr int kToggleLabelGapPx = 4;
-    constexpr int kToggleLabelRightPadPx = 10;
     constexpr int kResizerCornerPx = 22;
     constexpr int kToggleBoxPx = 72;
     constexpr int kMinToggleBlocksGapPx = 10;
+}
 
-    struct HorizontalLayoutMetrics
+DisperserAudioProcessorEditor::HorizontalLayoutMetrics
+DisperserAudioProcessorEditor::buildHorizontalLayout (int editorW, int valueColW)
+{
+    HorizontalLayoutMetrics m;
+    m.barW = (int) std::round (editorW * 0.455);
+    m.valuePad = (int) std::round (editorW * 0.02);
+    m.valueW = valueColW;
+    m.contentW = m.barW + m.valuePad + m.valueW;
+    m.leftX = juce::jmax (6, (editorW - m.contentW) / 2);
+    return m;
+}
+
+DisperserAudioProcessorEditor::VerticalLayoutMetrics
+DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY)
+{
+    VerticalLayoutMetrics m;
+    m.rhythm = juce::jlimit (6, 16, (int) std::round (editorH * 0.018));
+    const int nominalBarH = juce::jlimit (14, 120, m.rhythm * 6);
+    const int nominalGapY = juce::jmax (4, m.rhythm * 4);
+
+    m.titleH = juce::jlimit (24, 56, m.rhythm * 4);
+    m.titleAreaH = m.titleH + 4;
+    const int computedTitleTopPad = 6 + biasY;
+    m.titleTopPad = (computedTitleTopPad > 8) ? computedTitleTopPad : 8;
+    const int titleGap = m.titleTopPad;
+    m.topMargin = m.titleTopPad + m.titleAreaH + titleGap;
+    m.betweenSlidersAndButtons = juce::jmax (8, m.rhythm * 2);
+    m.bottomMargin = m.titleTopPad;
+
+    m.box = juce::jlimit (40, kToggleBoxPx, (int) std::round (editorH * 0.085));
+    m.btnY = editorH - m.bottomMargin - m.box;
+    m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
+
+    const int nominalStack = 4 * nominalBarH + 3 * nominalGapY;
+    const double stackScale = nominalStack > 0 ? juce::jmin (1.0, (double) m.availableForSliders / (double) nominalStack)
+                                               : 1.0;
+
+    m.barH = juce::jmax (14, (int) std::round (nominalBarH * stackScale));
+    m.gapY = juce::jmax (4,  (int) std::round (nominalGapY * stackScale));
+
+    auto stackHeight = [&]() { return 4 * m.barH + 3 * m.gapY; };
+
+    while (stackHeight() > m.availableForSliders && m.gapY > 4)
+        --m.gapY;
+
+    while (stackHeight() > m.availableForSliders && m.barH > 14)
+        --m.barH;
+
+    m.topY = m.topMargin;
+    return m;
+}
+
+void DisperserAudioProcessorEditor::updateCachedLayout()
+{
+    cachedHLayout_ = buildHorizontalLayout (getWidth(), getTargetValueColumnWidth());
+    cachedVLayout_ = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx);
+
+    const juce::Slider* sliders[4] = { &amountSlider, &seriesSlider, &freqSlider, &shapeSlider };
+
+    for (int i = 0; i < 4; ++i)
     {
-        int barW = 0;
-        int valuePad = 0;
-        int valueW = 0;
-        int contentW = 0;
-        int leftX = 0;
-    };
-
-    struct VerticalLayoutMetrics
-    {
-        int rhythm = 0;
-        int titleH = 0;
-        int titleAreaH = 0;
-        int titleTopPad = 0;
-        int topMargin = 0;
-        int betweenSlidersAndButtons = 0;
-        int bottomMargin = 0;
-        int box = 0;
-        int btnY = 0;
-        int availableForSliders = 0;
-        int barH = 0;
-        int gapY = 0;
-        int topY = 0;
-    };
-
-    HorizontalLayoutMetrics makeHorizontalLayoutMetrics (int editorW, int valueW)
-    {
-        HorizontalLayoutMetrics m;
-        m.barW = (int) std::round (editorW * 0.455);
-        m.valuePad = (int) std::round (editorW * 0.02);
-        m.valueW = valueW;
-        m.contentW = m.barW + m.valuePad + m.valueW;
-        m.leftX = juce::jmax (6, (editorW - m.contentW) / 2);
-        return m;
-    }
-
-    VerticalLayoutMetrics makeVerticalLayoutMetrics (int editorH, int layoutVerticalBiasPx)
-    {
-        VerticalLayoutMetrics m;
-        m.rhythm = juce::jlimit (6, 16, (int) std::round (editorH * 0.018));
-        const int nominalBarH = juce::jlimit (14, 120, m.rhythm * 6);
-        const int nominalGapY = juce::jmax (4, m.rhythm * 4);
-
-        m.titleH = juce::jlimit (24, 56, m.rhythm * 4);
-        m.titleAreaH = m.titleH + 4;
-        const int computedTitleTopPad = 6 + layoutVerticalBiasPx;
-        m.titleTopPad = (computedTitleTopPad > 8) ? computedTitleTopPad : 8;
-        const int titleGap = m.titleTopPad;
-        m.topMargin = m.titleTopPad + m.titleAreaH + titleGap;
-        m.betweenSlidersAndButtons = juce::jmax (8, m.rhythm * 2);
-        m.bottomMargin = m.titleTopPad;
-
-        m.box = kToggleBoxPx;
-        m.btnY = editorH - m.bottomMargin - m.box;
-        m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
-
-        const int nominalStack = 4 * nominalBarH + 3 * nominalGapY;
-        const double stackScale = nominalStack > 0 ? juce::jmin (1.0, (double) m.availableForSliders / (double) nominalStack)
-                                                   : 1.0;
-
-        m.barH = juce::jmax (14, (int) std::round (nominalBarH * stackScale));
-        m.gapY = juce::jmax (4,  (int) std::round (nominalGapY * stackScale));
-
-        auto stackHeight = [&]() { return 4 * m.barH + 3 * m.gapY; };
-
-        while (stackHeight() > m.availableForSliders && m.gapY > 4)
-            --m.gapY;
-
-        while (stackHeight() > m.availableForSliders && m.barH > 14)
-            --m.barH;
-
-        m.topY = m.topMargin;
-        return m;
+        const auto& bb = sliders[i]->getBounds();
+        const int valueX = bb.getRight() + cachedHLayout_.valuePad;
+        const int maxW = juce::jmax (0, getWidth() - valueX - kValueAreaRightMarginPx);
+        const int vw   = juce::jmin (cachedHLayout_.valueW, maxW);
+        const int y    = bb.getCentreY() - (kValueAreaHeightPx / 2);
+        cachedValueAreas_[(size_t) i] = { valueX, y, juce::jmax (0, vw), kValueAreaHeightPx };
     }
 }
 
@@ -2917,7 +2047,7 @@ int DisperserAudioProcessorEditor::getTargetValueColumnWidth() const
 
 juce::Rectangle<int> DisperserAudioProcessorEditor::getValueAreaFor (const juce::Rectangle<int>& barBounds) const
 {
-    const auto layout = makeHorizontalLayoutMetrics (getWidth(), getTargetValueColumnWidth());
+    const auto layout = buildHorizontalLayout (getWidth(), getTargetValueColumnWidth());
 
     const int valueX = barBounds.getRight() + layout.valuePad;
     const int maxW = juce::jmax (0, getWidth() - valueX - kValueAreaRightMarginPx);
@@ -2949,7 +2079,7 @@ namespace
     int getToggleVisualBoxSidePx (const juce::Component& button)
     {
         const int h = button.getHeight();
-        return juce::jlimit (14, juce::jmax (14, h - 2), (int) std::lround ((double) h * 0.50));
+        return juce::jlimit (14, juce::jmax (14, h - 2), (int) std::lround ((double) h * 0.65));
     }
 
     int getToggleVisualBoxLeftPx (const juce::Component& button)
@@ -2958,37 +2088,51 @@ namespace
     }
 
     juce::Rectangle<int> makeToggleLabelArea (const juce::Component& button,
-                                              int editorWidth,
-                                              const juce::String& labelText)
+                                              int collisionRight,
+                                              const juce::String& fullLabel,
+                                              const juce::String& shortLabel)
     {
         const auto b = button.getBounds();
         const int visualRight = getToggleVisualBoxLeftPx (button) + getToggleVisualBoxSidePx (button);
         const int x = visualRight + kToggleLabelGapPx;
 
-        juce::Font labelFont (juce::FontOptions (40.0f).withStyle ("Bold"));
-        const int desiredW = stringWidth (labelFont, labelText) + 2;
-        const int maxW = juce::jmax (0, editorWidth - x - kToggleLabelRightPadPx);
-        const int w = juce::jmin (desiredW, maxW);
+        const auto& labelFont = kBoldFont40();
+        const int fullW  = stringWidth (labelFont, fullLabel) + 2;
+        const int shortW = stringWidth (labelFont, shortLabel) + 2;
+        const int maxW   = juce::jmax (0, collisionRight - x);
 
+        const int w = (fullW <= maxW) ? fullW : juce::jmin (shortW, maxW);
         return { x, b.getY(), w, b.getHeight() };
+    }
+
+    juce::String chooseToggleLabel (const juce::Component& button,
+                                   int collisionRight,
+                                   const juce::String& fullLabel,
+                                   const juce::String& shortLabel)
+    {
+        const int visualRight = getToggleVisualBoxLeftPx (button) + getToggleVisualBoxSidePx (button);
+        const int x = visualRight + kToggleLabelGapPx;
+        const auto& labelFont = kBoldFont40();
+        const int fullW = stringWidth (labelFont, fullLabel) + 2;
+        return (fullW <= juce::jmax (0, collisionRight - x)) ? fullLabel : shortLabel;
     }
 }
 
 juce::Rectangle<int> DisperserAudioProcessorEditor::getRvsLabelArea() const
 {
-    return makeToggleLabelArea (rvsButton, getWidth(), "RVS");
+    return makeToggleLabelArea (rvsButton, invButton.getX() - kToggleLegendCollisionPadPx, "REVERSE", "RVS");
 }
 
 juce::Rectangle<int> DisperserAudioProcessorEditor::getInvLabelArea() const
 {
-    return makeToggleLabelArea (invButton, getWidth(), "INV");
+    return makeToggleLabelArea (invButton, cachedValueAreas_[0].getRight(), "INVERT", "INV");
 }
 
 juce::Rectangle<int> DisperserAudioProcessorEditor::getInfoIconArea() const
 {
     const auto amountValueArea = getValueAreaFor (amountSlider.getBounds());
     const int contentRight = amountValueArea.getRight();
-    const auto verticalLayout = makeVerticalLayoutMetrics (getHeight(), kLayoutVerticalBiasPx);
+    const auto verticalLayout = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx);
     const int titleH = verticalLayout.titleH;
     const int titleY = verticalLayout.titleTopPad;
     const int titleAreaH = verticalLayout.titleAreaH;
@@ -3057,73 +2201,61 @@ void DisperserAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& e)
 void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
 {
     const int W = getWidth();
-    const auto horizontalLayout = makeHorizontalLayoutMetrics (W, getTargetValueColumnWidth());
-    const auto verticalLayout = makeVerticalLayoutMetrics (getHeight(), kLayoutVerticalBiasPx);
-    const auto amountValueArea = getValueAreaFor (amountSlider.getBounds());
-    const auto seriesValueArea = getValueAreaFor (seriesSlider.getBounds());
-    const auto freqValueArea = getValueAreaFor (freqSlider.getBounds());
-    const auto shapeValueArea = getValueAreaFor (shapeSlider.getBounds());
+    const auto& horizontalLayout = cachedHLayout_;
+    const auto& verticalLayout   = cachedVLayout_;
 
-    const auto scheme = schemes[(size_t) currentSchemeIndex];
-    const bool useShortLabels = (labelVisibilityMode == 1);
-    const bool shouldHideUnitLabels = (labelVisibilityMode == 2);
+    const auto scheme = activeScheme;
 
     g.fillAll (scheme.bg);
     g.setColour (scheme.text);
 
     constexpr float baseFontPx = 40.0f;
     constexpr float minFontPx  = 18.0f;
-    const juce::String barTailTuning; // "" = sin modificación; ejemplos: "80%", "-1"
+    constexpr float fullShrinkFloor = baseFontPx * 0.75f;
+    g.setFont (kBoldFont40());
 
-    g.setFont (juce::Font (juce::FontOptions (baseFontPx).withStyle ("Bold")));
-
-    auto drawAlignedLegend = [&] (const juce::Rectangle<int>& area,
-                                  const juce::String& text,
-                                  bool useAutoMargin,
-                                  bool useTailEffect,
-                                  bool tailFromSuffixToLeft,
-                                  bool lowercaseTailChars,
-                                  const juce::String& tailTuning)
+    auto tryDrawLegend = [&] (const juce::Rectangle<int>& area,
+                              const juce::String& text,
+                              float shrinkFloor) -> bool
     {
-        auto t = text.toUpperCase().trim();
+        auto t = text.trim();
+        if (t.isEmpty() || area.getWidth() <= 2 || area.getHeight() <= 2)
+            return false;
+
         const int split = t.lastIndexOfChar (' ');
         if (split <= 0 || split >= t.length() - 1)
-            return drawValueNoEllipsis (g, area, t, juce::String(), t, baseFontPx, minFontPx), void();
+        {
+            g.setFont (kBoldFont40());
+            return drawIfFitsWithOptionalShrink (g, area, t, baseFontPx, shrinkFloor);
+        }
 
-        const auto value = t.substring (0, split).trimEnd();
+        const auto value  = t.substring (0, split).trimEnd();
         const auto suffix = t.substring (split + 1).trimStart();
-        const auto* tailGradient = (useTailEffect && fxTailEnabled) ? &lnf.getTrailingTextGradient() : nullptr;
 
-        if (! drawValueWithRightAlignedSuffix (g, area, value, suffix, useAutoMargin, baseFontPx, minFontPx,
-                                               tailGradient, tailFromSuffixToLeft, lowercaseTailChars, tailTuning))
-            drawValueNoEllipsis (g, area, t, juce::String(), value, baseFontPx, minFontPx);
-
-        g.setColour (scheme.text);
+        g.setFont (kBoldFont40());
+        if (drawValueWithRightAlignedSuffix (g, area, value, suffix, false,
+                                              baseFontPx, shrinkFloor))
+        {
+            g.setColour (scheme.text);
+            return true;
+        }
+        return false;
     };
 
     auto drawLegendForMode = [&] (const juce::Rectangle<int>& area,
                                   const juce::String& fullLegend,
                                   const juce::String& shortLegend,
-                                  const juce::String& intOnlyLegend,
-                                  const juce::String& tailTuning)
+                                  const juce::String& intOnlyLegend)
     {
-        if (shouldHideUnitLabels)
-        {
-            drawValueNoEllipsis (g, area,
-                                 intOnlyLegend,
-                                 juce::String(),
-                                 intOnlyLegend,
-                                 baseFontPx, minFontPx);
+        if (tryDrawLegend (area, fullLegend, fullShrinkFloor))
             return;
-        }
 
-        drawAlignedLegend (area,
-                           useShortLabels ? shortLegend : fullLegend,
-                           false,
-                           true,
-                           true,
-                           true,
-                           tailTuning);
+        if (tryDrawLegend (area, shortLegend, minFontPx))
+            return;
+
+        g.setFont (kBoldFont40());
+        drawValueNoEllipsis (g, area, intOnlyLegend, juce::String(), intOnlyLegend, baseFontPx, minFontPx);
+        g.setColour (scheme.text);
     };
 
     {
@@ -3144,18 +2276,8 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         const auto titleArea = juce::Rectangle<int> (titleX, titleY, titleW, titleH + kTitleAreaExtraHeightPx);
         const juce::String titleText ("DISP-TR");
 
-        // Keep tail behaviour exactly as original (unchanged params / unchanged font).
-        if (fxTailEnabled)
-        {
-            drawTextWithRepeatedLastCharGradient (g, titleArea, titleText, barW, lnf.getTrailingTextGradient(), titleX + barW,
-                          juce::String(), "20%", "pyramid");
-        }
-        else
-        {
-            g.drawText (titleText, titleArea.getX(), titleArea.getY(), titleArea.getWidth(), titleArea.getHeight(), juce::Justification::left, false);
-        }
+        g.drawText (titleText, titleArea.getX(), titleArea.getY(), titleArea.getWidth(), titleArea.getHeight(), juce::Justification::left, false);
 
-        // If horizontal space is too tight, fix only the base title text by overdrawing a fitted version.
         const auto infoIconArea = getInfoIconArea();
         const int titleRightLimit = infoIconArea.getX() - kTitleRightGapToInfoPx;
         const int titleMaxW = juce::jmax (0, titleRightLimit - titleArea.getX());
@@ -3166,9 +2288,11 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         if (titleMaxW > 0 && (originalWouldClipTitle || titleBaseW > titleMaxW))
         {
             auto fittedTitleFont = titleFont;
-            for (float h = (float) titleH; h >= 12.0f; h -= 1.0f)
+            fittedTitleFont.setHorizontalScale (1.0f);
+            const float titleMinScale = juce::jlimit (0.4f, 1.0f, 12.0f / (float) titleH);
+            for (float s = 1.0f; s >= titleMinScale; s -= 0.025f)
             {
-                fittedTitleFont.setHeight (h);
+                fittedTitleFont.setHorizontalScale (s);
                 if (stringWidth (fittedTitleFont, titleText) <= titleMaxW)
                     break;
             }
@@ -3193,62 +2317,40 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         const int versionW = juce::jmax (0, versionRight - versionX);
 
         if (versionW > 0)
-            g.drawText ("v1.0b", versionX, versionY, versionW, versionH,
+            g.drawText (juce::String ("v") + InfoContent::version, versionX, versionY, versionW, versionH,
                 juce::Justification::bottomRight, false);
 
-        g.setFont (juce::Font (juce::FontOptions (baseFontPx).withStyle ("Bold")));
+        g.setFont (kBoldFont40());
     }
 
     {
-        const int v = (int) std::llround (amountSlider.getValue());
+        const juce::String* fullTexts[4]  = { &cachedAmountTextFull, &cachedSeriesTextFull,
+                                               &cachedFreqTextHz, &cachedShapeTextFull };
+        const juce::String* shortTexts[4] = { &cachedAmountTextShort, &cachedSeriesTextShort,
+                                               &cachedFreqTextHz, &cachedShapeTextShort };
+        const juce::String intTexts[4] = {
+            juce::String ((int) amountSlider.getValue()),
+            juce::String ((int) seriesSlider.getValue()),
+            cachedFreqIntOnly,
+            cachedShapeIntOnly
+        };
 
-        drawLegendForMode (amountValueArea,
-                           cachedAmountTextFull,
-                           cachedAmountTextShort,
-                           juce::String (v),
-                           barTailTuning);
+        for (int i = 0; i < 4; ++i)
+            drawLegendForMode (cachedValueAreas_[(size_t) i], *fullTexts[i], *shortTexts[i], intTexts[i]);
     }
 
     {
-        const int v = (int) std::llround (seriesSlider.getValue());
+        const auto& labelFont = kBoldFont40();
+        g.setFont (labelFont);
 
-        drawLegendForMode (seriesValueArea,
-                           cachedSeriesTextFull,
-                           cachedSeriesTextShort,
-                           juce::String (v),
-                           barTailTuning);
-    }
+        const int rvsCR  = invButton.getX() - kToggleLegendCollisionPadPx;
+        const int invCR  = cachedValueAreas_[0].getRight();
 
-    {
-        const juce::String hzLegend = cachedFreqTextHz;
-        const juce::String intOnly = cachedFreqIntOnly;
-        const juce::String freqTailTuning = "-2";
-
-        drawLegendForMode (freqValueArea,
-                           hzLegend,
-                           hzLegend,
-                           intOnly,
-                           freqTailTuning);
-    }
-
-    {
-        const juce::String intOnly = cachedShapeIntOnly;
-
-        drawLegendForMode (shapeValueArea,
-                   cachedShapeTextFull,
-                   cachedShapeTextShort,
-                           intOnly,
-                           barTailTuning);
-    }
-
-    {
         auto drawToggleLegend = [&] (const juce::Rectangle<int>& labelArea,
                                      const juce::String& labelText,
-                                     int noCollisionRight,
-                                     const juce::String& tailTuning)
+                                     int noCollisionRight)
         {
             const int safeW = juce::jmax (0, noCollisionRight - labelArea.getX());
-            // snap to integer/even coordinates to avoid sub-pixel artefacts on resize
             auto snapEven = [] (int v) { return v & ~1; };
             const int ax = snapEven (labelArea.getX());
             const int ay = snapEven (labelArea.getY());
@@ -3256,15 +2358,11 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             const int ah = labelArea.getHeight();
             const auto drawArea = juce::Rectangle<int> (ax, ay, aw, ah);
 
-            if (fxTailEnabled)
-                drawTextWithRepeatedLastCharGradient (g, drawArea, labelText, getWidth(), lnf.getTrailingTextGradient(), noCollisionRight,
-                                      tailTuning, "20%", "pyramid");
-            else
-                g.drawText (labelText, drawArea.getX(), drawArea.getY(), drawArea.getWidth(), drawArea.getHeight(), juce::Justification::left, true);
+            g.drawText (labelText, drawArea.getX(), drawArea.getY(), drawArea.getWidth(), drawArea.getHeight(), juce::Justification::left, true);
         };
 
-        drawToggleLegend (getRvsLabelArea(), "RVS", invButton.getX() - kToggleLegendCollisionPadPx, "-3");
-        drawToggleLegend (getInvLabelArea(), "INV", amountValueArea.getRight(), "-2");
+        drawToggleLegend (getRvsLabelArea(), chooseToggleLabel (rvsButton, rvsCR, "REVERSE", "RVS"), rvsCR);
+        drawToggleLegend (getInvLabelArea(), chooseToggleLabel (invButton, invCR, "INVERT", "INV"), invCR);
     }
     g.setColour (scheme.text);
 
@@ -3272,7 +2370,6 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         if (cachedInfoGearPath.isEmpty())
             updateInfoIconCache();
 
-        // filled white gear + center cutout
         g.setColour (scheme.text);
         g.fillPath (cachedInfoGearPath);
         g.strokePath (cachedInfoGearPath, juce::PathStrokeType (1.0f));
@@ -3280,10 +2377,12 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         g.setColour (scheme.bg);
         g.fillEllipse (cachedInfoGearHole);
     }
-
 }
 
-
+void DisperserAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
+{
+    juce::ignoreUnused (g);
+}
 
 void DisperserAudioProcessorEditor::updateInfoIconCache()
 {
@@ -3313,60 +2412,10 @@ void DisperserAudioProcessorEditor::updateInfoIconCache()
     cachedInfoGearHole = { center.x - holeR, center.y - holeR, holeR * 2.0f, holeR * 2.0f };
 }
 
-void DisperserAudioProcessorEditor::updateLegendVisibility()
-{
-    constexpr float baseFontPx = 40.0f;
-    constexpr float minFontPx  = 18.0f;
-    const float softShrinkFloorFull  = juce::jmax (minFontPx, baseFontPx * 0.88f);
-    const float softShrinkFloorShort = minFontPx;
-
-    juce::Font measureFont (juce::FontOptions (baseFontPx).withStyle ("Bold"));
-
-    auto areaAmount = getValueAreaFor (amountSlider.getBounds());
-    auto areaSeries = getValueAreaFor (seriesSlider.getBounds());
-    auto areaFreq   = getValueAreaFor (freqSlider.getBounds());
-    auto areaShape = getValueAreaFor (shapeSlider.getBounds());
-
-    // Check FULL versions using fixed worst-case templates (stable, value-independent)
-    const juce::String amountFull  = kAmountLegendFull;
-    const juce::String freqFull    = kFreqLegendDisplay;
-    const juce::String seriesFull  = kSeriesLegendFull;
-    const juce::String shapeFull   = kShapeLegendFull;
-
-    const bool amountFullFits = fitsWithOptionalShrink_NoG (measureFont, amountFull, areaAmount.getWidth(), baseFontPx, softShrinkFloorFull);
-    const bool freqFullFits = fitsWithOptionalShrink_NoG (measureFont, freqFull, areaFreq.getWidth(), baseFontPx, softShrinkFloorFull);
-    const bool seriesFullFits = fitsWithOptionalShrink_NoG (measureFont, seriesFull, areaSeries.getWidth(), baseFontPx, softShrinkFloorFull);
-    const bool shapeFullFits = fitsWithOptionalShrink_NoG (measureFont, shapeFull, areaShape.getWidth(), baseFontPx, softShrinkFloorFull);
-
-    // Check SHORT versions using fixed worst-case templates (stable, value-independent)
-    const juce::String amountShort = kAmountLegendShort;
-    const juce::String freqShort   = kFreqLegendDisplay;
-    const juce::String seriesShort = kSeriesLegendShort;
-    const juce::String shapeShort  = kShapeLegendShort;
-
-    const bool amountShortFits = fitsWithOptionalShrink_NoG (measureFont, amountShort, areaAmount.getWidth(), baseFontPx, softShrinkFloorShort);
-    const bool freqShortFits = fitsWithOptionalShrink_NoG (measureFont, freqShort, areaFreq.getWidth(), baseFontPx, softShrinkFloorShort);
-    const bool seriesShortFits = fitsWithOptionalShrink_NoG (measureFont, seriesShort, areaSeries.getWidth(), baseFontPx, softShrinkFloorShort);
-    const bool shapeShortFits = fitsWithOptionalShrink_NoG (measureFont, shapeShort, areaShape.getWidth(), baseFontPx, softShrinkFloorShort);
-
-    // Determine global mode: 0=Full, 1=Short, 2=None
-    const bool anyFullFailed = (!amountFullFits || !freqFullFits || !seriesFullFits || !shapeFullFits);
-    const bool anyShortFailed = (!amountShortFits || !freqShortFits || !seriesShortFits || !shapeShortFits);
-
-    if (anyShortFailed)
-        labelVisibilityMode = 2;  // None
-    else if (anyFullFailed)
-        labelVisibilityMode = 1;  // Short
-    else
-        labelVisibilityMode = 0;  // Full
-}
-
 void DisperserAudioProcessorEditor::resized()
 {
     refreshLegendTextCache();
 
-    // If the user is actively dragging/resizing (mouse down), treat this
-    // as a recent user interaction so size persistence will occur immediately.
     if (! suppressSizePersistence)
     {
         if (juce::ModifierKeys::getCurrentModifiers().isAnyMouseButtonDown()
@@ -3392,8 +2441,8 @@ void DisperserAudioProcessorEditor::resized()
         }
     }
 
-    const auto horizontalLayout = makeHorizontalLayoutMetrics (W, getTargetValueColumnWidth());
-    const auto verticalLayout = makeVerticalLayoutMetrics (H, kLayoutVerticalBiasPx);
+    const auto horizontalLayout = buildHorizontalLayout (W, getTargetValueColumnWidth());
+    const auto verticalLayout = buildVerticalLayout (H, kLayoutVerticalBiasPx);
 
     amountSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 0 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
     seriesSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 1 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
@@ -3403,18 +2452,10 @@ void DisperserAudioProcessorEditor::resized()
     const int buttonAreaX = horizontalLayout.leftX;
     const int buttonAreaW = horizontalLayout.contentW;
 
-    juce::Font labelFont (juce::FontOptions (40.0f).withStyle ("Bold"));
-    const int rvsLabelW = stringWidth (labelFont, "RVS") + 2;
-    const int invLabelW = stringWidth (labelFont, "INV") + 2;
-    const int labelGap = kToggleLabelGapPx;
-
     const int toggleVisualSide = juce::jlimit (14,
                                                juce::jmax (14, verticalLayout.box - 2),
-                                               (int) std::lround ((double) verticalLayout.box * 0.50));
+                                               (int) std::lround ((double) verticalLayout.box * 0.65));
     const int toggleHitW = toggleVisualSide + 6;
-
-    const int rvsBlockW = juce::jmax (toggleHitW, toggleHitW + labelGap + rvsLabelW);
-    const int invBlockW = juce::jmax (toggleHitW, toggleHitW + labelGap + invLabelW);
 
     const int valueStartX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
     const int rvsAnchorX = horizontalLayout.leftX;
@@ -3423,8 +2464,8 @@ void DisperserAudioProcessorEditor::resized()
     int rvsBlockX = rvsAnchorX;
     int invBlockX = invAnchorX;
 
-    const int invMinX = juce::jmax (invAnchorX, rvsBlockX + rvsBlockW + kMinToggleBlocksGapPx);
-    const int invMaxX = buttonAreaX + buttonAreaW - invBlockW;
+    const int invMinX = juce::jmax (invAnchorX, rvsBlockX + toggleHitW + kMinToggleBlocksGapPx);
+    const int invMaxX = buttonAreaX + buttonAreaW - toggleHitW;
     if (invMinX <= invMaxX)
         invBlockX = juce::jlimit (invMinX, invMaxX, invBlockX);
     else
@@ -3440,11 +2481,9 @@ void DisperserAudioProcessorEditor::resized()
     if (promptOverlayActive)
         promptOverlay.toFront (false);
 
+    updateCachedLayout();
+
     updateInfoIconCache();
-
-    // Update legend visibility globally: if ANY slider cannot fit its labels, ALL are disabled
-    updateLegendVisibility();
-
-    // Don't modify the constrainer here to avoid reentrancy issues.
+    crtEffect.setResolution (static_cast<float> (W), static_cast<float> (H));
 }
 
