@@ -5,7 +5,6 @@
 #include <atomic>
 #include <vector>
 #include "DspDebugLog.h"
-#include "UniformConvolver.h"
 
 class DisperserAudioProcessor : public juce::AudioProcessor
 {
@@ -17,12 +16,14 @@ public:
 	static constexpr const char* kParamSeries    = "series";
 	static constexpr const char* kParamFreq      = "freq";
 	static constexpr const char* kParamShape     = "shape";
-	static constexpr const char* kParamReverse   = "reverse";
 	static constexpr const char* kParamInv       = "inv";
+	static constexpr const char* kParamFeedback  = "feedback";
+	static constexpr const char* kParamMod       = "mod";
+	static constexpr const char* kParamMix       = "mix";
+	static constexpr const char* kParamMidi      = "midi";
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
-	static constexpr const char* kParamRvsDecay  = "rvs_decay";
-	static constexpr const char* kParamFeedback  = "feedback";
+
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -42,9 +43,15 @@ public:
 
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
-	static constexpr float kRvsDecayDefault = 0.5f;
+	static constexpr float kFeedbackMin     = 0.0f;
+	static constexpr float kFeedbackMax     = 1.0f;
 	static constexpr float kFeedbackDefault = 0.0f;
-	static constexpr float kFeedbackMax     = 0.95f;
+	static constexpr float kModMin     = 0.0f;
+	static constexpr float kModMax     = 1.0f;
+	static constexpr float kModDefault = 0.5f;
+	static constexpr float kMixMin     = 0.0f;
+	static constexpr float kMixMax     = 1.0f;
+	static constexpr float kMixDefault = 1.0f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -89,6 +96,12 @@ public:
 	void setUiCustomPaletteColour (int index, juce::Colour colour);
 	juce::Colour getUiCustomPaletteColour (int index) const noexcept;
 
+	void setMidiChannel (int channel);
+	int getMidiChannel() const noexcept;
+
+	static juce::String getMidiNoteName (int midiNote);
+	juce::String getCurrentFreqDisplay() const;
+
 	juce::AudioProcessorValueTreeState apvts;
 	static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -104,6 +117,7 @@ private:
 		static constexpr const char* editorHeight = "uiEditorHeight";
 		static constexpr const char* useCustomPalette = "uiUseCustomPalette";
 		static constexpr const char* fxTailEnabled = "uiFxTailEnabled";
+		static constexpr const char* midiPort = "midiPort";
 		static constexpr std::array<const char*, 4> customPalette {
 			"uiCustomPalette0", "uiCustomPalette1", "uiCustomPalette2", "uiCustomPalette3"
 		};
@@ -113,16 +127,18 @@ private:
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
 	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
-	int computeRvsIrLengthSamples (int stages, int series) const noexcept;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
 	std::vector<float> stageCoeff;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> stagesSmoothed;
-	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> freqSmoothed;
+	float smoothedFreqValue = 1000.0f;
+	float freqEmaCoeff = 0.0f;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> shapeSmoothed;
 	static constexpr double kStageSmoothingSeconds = 0.06;
-	static constexpr double kFreqSmoothingSeconds = 0.08;
+	static constexpr float kFreqTauDefault   = 0.08f;
+	static constexpr float kMidiGlideTauMax  = 0.200f;
+	static constexpr float kMidiGlideTauMin  = 0.0002f;
 	static constexpr double kShapeSmoothingSeconds = 0.05;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
@@ -145,68 +161,11 @@ private:
 	int seriesXfadeTotalSamples = 0;
 	int previousSeries = kSeriesDefault;
 
-	// ── Background thread for non-blocking IR rebuild ──
-	class RvsRebuildThread : public juce::Thread
-	{
-	public:
-		explicit RvsRebuildThread (DisperserAudioProcessor& owner)
-			: juce::Thread ("DISP-TR RVS Rebuild"), proc (owner) {}
-
-		void requestRebuild (int stages, int series, float freq, float shape) noexcept
-		{
-			reqStages.store (stages, std::memory_order_relaxed);
-			reqSeries.store (series, std::memory_order_relaxed);
-			reqFreq  .store (freq,   std::memory_order_relaxed);
-			reqShape .store (shape,  std::memory_order_relaxed);
-			pending  .store (true,   std::memory_order_release);
-			notify();
-		}
-
-		bool isBusy() const noexcept { return busy.load (std::memory_order_acquire); }
-
-		void run() override;  // implemented in PluginProcessor.cpp
-
-	private:
-		DisperserAudioProcessor& proc;
-		std::atomic<int>   reqStages { 0 };
-		std::atomic<int>   reqSeries { 1 };
-		std::atomic<float> reqFreq   { 1000.0f };
-		std::atomic<float> reqShape  { 0.0f };
-		std::atomic<bool>  pending   { false };
-		std::atomic<bool>  busy      { false };
-
-		// Own scratch buffers (not shared with audio thread)
-		std::vector<float> coeffScratch;
-		std::array<std::vector<AllPassState>, kSeriesMax> stateScratch;
-		std::vector<float> fwdIrScratch;
-		std::vector<float> revIrScratch;
-	};
-
-	std::unique_ptr<RvsRebuildThread> rvsRebuildThread;
-
-	UniformConvolver rvsConvL;
-	UniformConvolver rvsConvR;
-	static constexpr int kRvsPartitionSize = 128;
-	static constexpr int kRvsMaxIrLength   = 2048;
-
-	// Thread-safe IR handoff: rebuild thread writes, audio thread reads
-	std::vector<float> sharedIrBuffer;
-	std::atomic<int>   sharedIrReady { 0 };  // 0=none, >0=new IR length
-
-	bool rvsRebuildPending = false;
-	int rvsRebuildCooldownSamples = 0;
-	int rvsStableSamples = 0;
-	int pendingRvsStages = -1;
-	int pendingRvsSeries = -1;
-	float pendingRvsFreq = -1.0f;
-	float pendingRvsShape = -1.0f;
-	int lastRvsStages = -1;
-	int lastRvsSeries = -1;
-	float lastRvsFreq = -1.0f;
-	float lastRvsShape = -1.0f;
-	int lastRvsIrLength = -1;
-	static constexpr int kRvsRebuildMinIntervalMs = 200;
-	static constexpr int kRvsSettleWindowMs = 120;
+	// ── MIDI note tracking ──
+	std::atomic<float> currentMidiFrequency { 0.0f };
+	std::atomic<int>   lastMidiNote { -1 };
+	std::atomic<int>   lastMidiVelocity { 127 };
+	std::atomic<int>   midiChannel { 0 };
 
 	double currentSampleRate = 44100.0;
 
@@ -214,12 +173,13 @@ private:
 	std::atomic<float>* seriesParam = nullptr;
 	std::atomic<float>* freqParam = nullptr;
 	std::atomic<float>* shapeParam = nullptr;
-	std::atomic<float>* reverseParam = nullptr;
 	std::atomic<float>* invParam = nullptr;
+	std::atomic<float>* feedbackParam = nullptr;
+	std::atomic<float>* modParam = nullptr;
+	std::atomic<float>* mixParam = nullptr;
+	std::atomic<float>* midiParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
-	std::atomic<float>* rvsDecayParam = nullptr;
-	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;

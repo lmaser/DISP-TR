@@ -1,7 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "DspDebugLog.h"
-#include <cstring>
 
 namespace
 {
@@ -31,60 +30,6 @@ namespace
 		}
 	}
 
-	inline void fillStageCoefficients (std::vector<float>& coeffOut,
-										 double sampleRate,
-										 float freqHz,
-										 float shapeNorm,
-										 int stages)
-	{
-		const int nStages = juce::jmax (1, stages);
-		coeffOut.assign ((size_t) nStages, 0.0f);
-
-		const float sr = (float) juce::jmax (1.0, sampleRate);
-		const float minFreq = 20.0f;
-		const float maxFreq = 0.49f * sr;
-		const float center = juce::jlimit (minFreq, maxFreq, freqHz);
-		const float shape = juce::jlimit (0.0f, 1.0f, shapeNorm);
-
-		const float logPos = std::log2 (center / minFreq) / std::log2 (maxFreq / minFreq);
-		const float lowComp = std::pow (juce::jlimit (0.0f, 1.0f, 1.0f - logPos), 1.15f);
-		const float shapeStrength = 1.0f + (0.95f * lowComp);
-		const float shapeComp = juce::jlimit (0.0f, 1.0f, 0.5f + ((shape - 0.5f) * shapeStrength));
-
-		const float spreadMax = 4.0f + (1.1f * lowComp);
-		const float spreadMin = 0.12f;
-		const float spreadOct = juce::jmap (shapeComp, spreadMax, spreadMin);
-		const float warpGamma = juce::jmap (shapeComp, 0.45f, 3.0f + (0.8f * lowComp));
-
-		if (nStages == 1)
-		{
-			const float t = std::tan (juce::MathConstants<float>::pi * center / sr);
-			coeffOut[0] = std::isfinite (t) ? (1.0f - t) / (1.0f + t) : 0.0f;
-			return;
-		}
-
-		const float denom = (float) juce::jmax (1, nStages - 1);
-		for (int i = 0; i < nStages; ++i)
-		{
-			const float u = (2.0f * ((float) i / denom)) - 1.0f;
-			const float absWarped = std::pow (std::abs (u), warpGamma);
-			const float warped = std::copysign (absWarped, u);
-			const float oct = 0.5f * spreadOct * warped;
-			const float f = juce::jlimit (minFreq, maxFreq, center * std::pow (2.0f, oct));
-			const float t = std::tan (juce::MathConstants<float>::pi * f / sr);
-			coeffOut[(size_t) i] = std::isfinite (t) ? (1.0f - t) / (1.0f + t) : 0.0f;
-		}
-	}
-
-	inline float mapReverseFrequencyFromControl (float frequencyHz) noexcept
-	{
-		const juce::NormalisableRange<float> frequencyRange (20.0f, 20000.0f, 0.0f, 0.35f);
-		const float clamped = juce::jlimit (frequencyRange.start, frequencyRange.end, frequencyHz);
-		const float normalised = juce::jlimit (0.0f, 1.0f, frequencyRange.convertTo0to1 (clamped));
-		const float invertedNormalised = 1.0f - normalised;
-		return frequencyRange.convertFrom0to1 (invertedNormalised);
-	}
-
 }
 
 DisperserAudioProcessor::DisperserAudioProcessor()
@@ -104,12 +49,13 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	seriesParam = apvts.getRawParameterValue (kParamSeries);
 	freqParam = apvts.getRawParameterValue (kParamFreq);
 	shapeParam = apvts.getRawParameterValue (kParamShape);
-	reverseParam = apvts.getRawParameterValue (kParamReverse);
 	invParam = apvts.getRawParameterValue (kParamInv);
+	feedbackParam = apvts.getRawParameterValue (kParamFeedback);
+	modParam = apvts.getRawParameterValue (kParamMod);
+	mixParam = apvts.getRawParameterValue (kParamMix);
+	midiParam = apvts.getRawParameterValue (kParamMidi);
 	s0Param = apvts.getRawParameterValue (kParamS0);
 	s100Param = apvts.getRawParameterValue (kParamS100);
-	rvsDecayParam = apvts.getRawParameterValue (kParamRvsDecay);
-	feedbackParam = apvts.getRawParameterValue (kParamFeedback);
 	uiWidthParam = apvts.getRawParameterValue (kParamUiWidth);
 	uiHeightParam = apvts.getRawParameterValue (kParamUiHeight);
 	uiPaletteParam = apvts.getRawParameterValue (kParamUiPalette);
@@ -122,11 +68,6 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
 {
-	if (rvsRebuildThread)
-	{
-		rvsRebuildThread->stopThread (500);
-		rvsRebuildThread.reset();
-	}
 }
 
 const juce::String DisperserAudioProcessor::getName() const { return JucePlugin_Name; }
@@ -188,8 +129,8 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
 	stagesSmoothed.reset (currentSampleRate, kStageSmoothingSeconds);
 	stagesSmoothed.setCurrentAndTargetValue ((float) stages);
-	freqSmoothed.reset (currentSampleRate, kFreqSmoothingSeconds);
-	freqSmoothed.setCurrentAndTargetValue (freq);
+	smoothedFreqValue = freq;
+	freqEmaCoeff = std::exp (-1.0f / ((float) currentSampleRate * kFreqTauDefault));
 	shapeSmoothed.reset (currentSampleRate, kShapeSmoothingSeconds);
 	shapeSmoothed.setCurrentAndTargetValue (shape);
 	feedbackSmoothed.reset (currentSampleRate, kFeedbackSmoothingSeconds);
@@ -201,58 +142,20 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
 
-	rvsConvL.prepare (kRvsPartitionSize, kRvsMaxIrLength);
-	rvsConvR.prepare (kRvsPartitionSize, kRvsMaxIrLength);
-
-	// Pre-allocate shared IR buffer for thread-safe handoff
-	sharedIrBuffer.assign ((size_t) kRvsMaxIrLength, 0.0f);
-	sharedIrReady.store (0, std::memory_order_relaxed);
-
-	// Stop any prior rebuild thread before resetting state
-	if (rvsRebuildThread)
-	{
-		rvsRebuildThread->stopThread (500);
-		rvsRebuildThread.reset();
-	}
-
-	rvsRebuildPending = false;
-	rvsRebuildCooldownSamples = 0;
-	rvsStableSamples = 0;
-	pendingRvsStages = -1;
-	pendingRvsSeries = -1;
-	pendingRvsFreq = -1.0f;
-	pendingRvsShape = -1.0f;
-	lastRvsStages = -1;
-	lastRvsSeries = -1;
-	lastRvsFreq = -1.0f;
-	lastRvsShape = -1.0f;
-	lastRvsIrLength = -1;
-
-	// Start background rebuild thread
-	rvsRebuildThread = std::make_unique<RvsRebuildThread> (*this);
-	rvsRebuildThread->startThread (juce::Thread::Priority::normal);
+	// Reset MIDI note tracking
+	lastMidiNote.store (-1, std::memory_order_relaxed);
+	currentMidiFrequency.store (0.0f, std::memory_order_relaxed);
 
 	dspLog.enableDesktopAutoDump();
 }
 
 void DisperserAudioProcessor::releaseResources()
 {
-	if (rvsRebuildThread)
-	{
-		rvsRebuildThread->stopThread (500);
-		rvsRebuildThread.reset();
-	}
-
 	for (auto& c : chainL) c.clear();
 	for (auto& c : chainR) c.clear();
 	for (auto& c : xfadeChainL) c.clear();
 	for (auto& c : xfadeChainR) c.clear();
 	stageCoeff.clear();
-	rvsConvL.reset();
-	rvsConvR.reset();
-	rvsRebuildPending = false;
-	rvsRebuildCooldownSamples = 0;
-	rvsStableSamples = 0;
 }
 
 #if ! JucePlugin_PreferredChannelConfigurations
@@ -357,123 +260,8 @@ void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm,
 	}
 }
 
-int DisperserAudioProcessor::computeRvsIrLengthSamples (int stages, int series) const noexcept
-{
-	const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
-	const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
-	const int complexity = juce::jmax (1, nStages * nSeries);
-	const int fullLen = 192 + (complexity * 10);
-	const int len = (int) std::round ((float) fullLen * 1.75f);
-	return juce::jlimit (192, kRvsMaxIrLength, len);
-}
-
-// ── Background IR rebuild thread ─────────────────────────────
-void DisperserAudioProcessor::RvsRebuildThread::run()
-{
-	coeffScratch.reserve ((size_t) kAmountMax);
-	for (auto& sv : stateScratch)
-		sv.assign ((size_t) kAmountMax, {});
-	fwdIrScratch.reserve (2048u);
-	revIrScratch.reserve (2048u);
-
-	while (! threadShouldExit())
-	{
-		if (! pending.exchange (false, std::memory_order_acquire))
-		{
-			wait (100);
-			continue;
-		}
-
-		busy.store (true, std::memory_order_release);
-
-		const int stages  = reqStages.load (std::memory_order_relaxed);
-		const int series  = reqSeries.load (std::memory_order_relaxed);
-		const float freq  = reqFreq  .load (std::memory_order_relaxed);
-		const float shape = reqShape .load (std::memory_order_relaxed);
-
-		DSP_LOG_REBUILD_BEGIN();
-
-		const int irLength = proc.computeRvsIrLengthSamples (stages, series);
-		const int nStages = juce::jlimit (kAmountMin, kAmountMax, stages);
-		const int nSeries = juce::jlimit (kSeriesMin, kSeriesMax, series);
-
-		// Build forward IR using thread-local scratch buffers
-		fwdIrScratch.assign ((size_t) irLength, 0.0f);
-
-		if (nStages > 0)
-		{
-			fillStageCoefficients (coeffScratch, proc.currentSampleRate, freq, shape, nStages);
-			for (int s = 0; s < nSeries; ++s)
-				for (int st = 0; st < nStages; ++st)
-					stateScratch[(size_t) s][(size_t) st].z1 = 0.0f;
-
-			for (int n = 0; n < irLength; ++n)
-			{
-				float x = (n == 0) ? 1.0f : 0.0f;
-				for (int s = 0; s < nSeries; ++s)
-				{
-					auto* states = stateScratch[(size_t) s].data();
-					for (int st = 0; st < nStages; ++st)
-					{
-						const float a = coeffScratch[(size_t) st];
-						auto& z = states[st];
-						const float y = (-a * x) + z.z1;
-						z.z1 = x + (a * y);
-						x = y;
-					}
-				}
-				fwdIrScratch[(size_t) n] = x;
-			}
-		}
-		else
-		{
-			fwdIrScratch[0] = 1.0f;
-		}
-
-		// Reverse
-		revIrScratch.resize ((size_t) irLength);
-		for (int i = 0; i < irLength; ++i)
-			revIrScratch[(size_t) i] = fwdIrScratch[(size_t) (irLength - 1 - i)];
-
-		// Tukey taper
-		const int taperLen = juce::jmin (irLength / 4, 128);
-		if (taperLen > 1)
-		{
-			for (int i = 0; i < taperLen; ++i)
-			{
-				const int idx = irLength - taperLen + i;
-				const float phase = (float) i / (float) (taperLen - 1);
-				const float window = 0.5f * (1.0f + std::cos (juce::MathConstants<float>::pi * phase));
-				revIrScratch[(size_t) idx] *= window;
-			}
-		}
-
-		// Peak normalise
-		float peak = 0.0f;
-		for (const float sample : revIrScratch)
-			peak = juce::jmax (peak, std::abs (sample));
-		if (peak > 1.0f)
-		{
-			const float gain = 1.0f / peak;
-			for (float& sample : revIrScratch)
-				sample *= gain;
-		}
-
-		// Store reversed IR in shared buffer for audio thread pickup
-		const int copyLen = juce::jmin (irLength, kRvsMaxIrLength);
-		std::memcpy (proc.sharedIrBuffer.data(), revIrScratch.data(),
-					 (size_t) copyLen * sizeof (float));
-		proc.sharedIrReady.store (copyLen, std::memory_order_release);
-
-		DSP_LOG_REBUILD_END(proc.dspLog, irLength, stages, series, freq, shape, 1.0f);
-
-		busy.store (false, std::memory_order_release);
-	}
-}
-
 void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-	juce::ignoreUnused (midi);
 	juce::ScopedNoDenormals noDenormals;
 	DSP_LOG_BLOCK_BEGIN();
 
@@ -489,9 +277,6 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const int targetSeries = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
 	float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
 	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (shapeParam, kShapeDefault));
-	const bool reverseEnabled = loadBoolParamOrDefault (reverseParam, false);
-	if (reverseEnabled)
-		targetFreq = mapReverseFrequencyFromControl (targetFreq);
 
 	// Debug overrides preserved.
 	if (loadBoolParamOrDefault (s0Param, false))
@@ -499,164 +284,84 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	if (loadBoolParamOrDefault (s100Param, false))
 		targetShape = 1.0f;
 	const bool invEnabled = loadBoolParamOrDefault (invParam, false);
-	const float targetFeedback = juce::jlimit (0.0f, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault));
+
+	// ── MIDI note tracking ───────────────────────────────────
+	const bool midiEnabled = loadBoolParamOrDefault (midiParam, false);
+	if (midiEnabled && ! midi.isEmpty())
+	{
+		const int ch = midiChannel.load (std::memory_order_relaxed);
+		for (const auto metadata : midi)
+		{
+			const auto msg = metadata.getMessage();
+			if (ch != 0 && msg.getChannel() != ch)
+				continue;
+			if (msg.isNoteOn())
+			{
+				const int note = msg.getNoteNumber();
+				lastMidiNote.store (note, std::memory_order_relaxed);
+				lastMidiVelocity.store (msg.getVelocity(), std::memory_order_relaxed);
+				currentMidiFrequency.store (440.0f * std::exp2 ((note - 69) * (1.0f / 12.0f)),
+					std::memory_order_relaxed);
+			}
+			else if (msg.isNoteOff())
+			{
+				if (msg.getNoteNumber() == lastMidiNote.load (std::memory_order_relaxed))
+				{
+					lastMidiNote.store (-1, std::memory_order_relaxed);
+					currentMidiFrequency.store (0.0f, std::memory_order_relaxed);
+				}
+			}
+		}
+	}
+	else if (! midiEnabled && lastMidiNote.load (std::memory_order_relaxed) >= 0)
+	{
+		lastMidiNote.store (-1, std::memory_order_relaxed);
+		currentMidiFrequency.store (0.0f, std::memory_order_relaxed);
+	}
+
+	// MIDI frequency override (priority: MIDI > manual slider)
+	const float midiFreq = currentMidiFrequency.load (std::memory_order_relaxed);
+	if (midiEnabled && midiFreq > 0.0f)
+		targetFreq = midiFreq;
+
+	// ── MOD frequency multiplier ─────────────────────────────
+	const float modValue = loadAtomicOrDefault (modParam, kModDefault);
+	const float freqMultiplier = (modValue < 0.5f)
+		? (0.25f + modValue * 1.5f)
+		: (1.0f + (modValue - 0.5f) * 6.0f);
+	targetFreq *= freqMultiplier;
+
+	// ── Smoothstep feedback mapping (3x²−2x³) ───────────────
+	float rawFeedback = juce::jlimit (0.0f, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault));
+	const float targetFeedback = rawFeedback * rawFeedback * (3.0f - 2.0f * rawFeedback);
 
 	stagesSmoothed.setTargetValue ((float) targetStages);
-	freqSmoothed.setTargetValue (targetFreq);
 	shapeSmoothed.setTargetValue (targetShape);
 	feedbackSmoothed.setTargetValue (targetFeedback);
 
-	// ── Reverse mode (convolution) ───────────────────────────
-	if (reverseEnabled)
+	// ── MIX (dry/wet) ───────────────────────────────────────
+	const float mixValue = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (mixParam, kMixDefault));
+
+	// Save dry input for dry/wet blend (only when mix < 1)
+	juce::AudioBuffer<float> dryBuffer;
+	const bool needsDryBlend = (mixValue < 0.999f);
+	if (needsDryBlend)
 	{
-		const float smoothedStages = juce::jlimit (0.0f, (float) kAmountMax, stagesSmoothed.skip (numSamples));
-		const float smoothedFreq = freqSmoothed.skip (numSamples);
-		const float smoothedShape = juce::jlimit (0.0f, 1.0f, shapeSmoothed.skip (numSamples));
-		const int smoothedStageCount = juce::jlimit (kAmountMin, kAmountMax,
-			(int) std::lround (smoothedStages));
+		dryBuffer.makeCopyOf (buffer);
+	}
 
-		const float quantShape = std::round (smoothedShape * 100.0f) * 0.01f;
-		const float freqOct = std::log2 (juce::jmax (20.0f, smoothedFreq) / 20.0f);
-		const float quantFreq = 20.0f * std::pow (2.0f, std::round (freqOct * 24.0f) / 24.0f);
-		const int candidateStages = smoothedStageCount;
-		const int candidateSeries = targetSeries;
-		const float candidateFreq = quantFreq;
-		const float candidateShape = quantShape;
-		auto differsFrom = [] (int stagesA, int seriesA, float freqA, float shapeA,
-							   int stagesB, int seriesB, float freqB, float shapeB) noexcept
-		{
-			return stagesA != stagesB
-				|| seriesA != seriesB
-				|| std::abs (freqA - freqB) > 0.01f
-				|| std::abs (shapeA - shapeB) > 0.0001f;
-		};
-
-		if (! rvsRebuildPending)
-		{
-			const bool differsFromLast = differsFrom (candidateStages,
-				candidateSeries,
-				candidateFreq,
-				candidateShape,
-				lastRvsStages,
-				lastRvsSeries,
-				lastRvsFreq,
-				lastRvsShape);
-
-			if (differsFromLast)
-			{
-				rvsRebuildPending = true;
-				pendingRvsStages = candidateStages;
-				pendingRvsSeries = candidateSeries;
-				pendingRvsFreq = candidateFreq;
-				pendingRvsShape = candidateShape;
-				rvsStableSamples = 0;
-			}
-		}
-		else
-		{
-			const bool differsFromPending = differsFrom (candidateStages,
-				candidateSeries,
-				candidateFreq,
-				candidateShape,
-				pendingRvsStages,
-				pendingRvsSeries,
-				pendingRvsFreq,
-				pendingRvsShape);
-
-			if (differsFromPending)
-			{
-				pendingRvsStages = candidateStages;
-				pendingRvsSeries = candidateSeries;
-				pendingRvsFreq = candidateFreq;
-				pendingRvsShape = candidateShape;
-				rvsStableSamples = 0;
-			}
-			else
-			{
-				rvsStableSamples += numSamples;
-			}
-		}
-
-		rvsRebuildCooldownSamples = juce::jmax (0, rvsRebuildCooldownSamples - numSamples);
-		const int settleSamples = (int) std::round ((currentSampleRate * kRvsSettleWindowMs) / 1000.0);
-		const bool allowInitialRebuild = (lastRvsStages < 0);
-		const bool settleReached = (rvsStableSamples >= settleSamples);
-		const bool threadBusy = rvsRebuildThread && rvsRebuildThread->isBusy();
-		if (rvsRebuildPending && rvsRebuildCooldownSamples <= 0
-			&& ! threadBusy && (allowInitialRebuild || settleReached))
-		{
-			if (rvsRebuildThread)
-				rvsRebuildThread->requestRebuild (pendingRvsStages,
-					pendingRvsSeries,
-					pendingRvsFreq,
-					pendingRvsShape);
-
-			// Update lastRvs* on the audio thread so we don't re-post the same request
-			lastRvsStages   = pendingRvsStages;
-			lastRvsSeries   = pendingRvsSeries;
-			lastRvsFreq     = pendingRvsFreq;
-			lastRvsShape    = pendingRvsShape;
-			lastRvsIrLength = computeRvsIrLengthSamples (pendingRvsStages, pendingRvsSeries);
-
-			rvsRebuildPending = false;
-			rvsStableSamples = 0;
-			rvsRebuildCooldownSamples = (int) std::round ((currentSampleRate * kRvsRebuildMinIntervalMs) / 1000.0);
-		}
-
-		// Pick up new IR from rebuild thread if available
-		const int newIrLen = sharedIrReady.exchange (0, std::memory_order_acquire);
-		if (newIrLen > 0)
-		{
-			rvsConvL.loadIR (sharedIrBuffer.data(), newIrLen);
-			rvsConvR.loadIR (sharedIrBuffer.data(), newIrLen);
-		}
-
-		// Apply feedback: mix previous convolution output into current input
-		const float fb = feedbackSmoothed.skip (numSamples);
-		if (fb > 0.0001f)
-		{
-			auto* ch0w = buffer.getWritePointer (0);
-			for (int n = 0; n < numSamples; ++n)
-				ch0w[n] += fb * feedbackLastL;
-			if (numChannels > 1)
-			{
-				auto* ch1w = buffer.getWritePointer (1);
-				for (int n = 0; n < numSamples; ++n)
-					ch1w[n] += fb * feedbackLastR;
-			}
-		}
-
-		// Process convolution (uniform cost per partition)
-		bool stereoIdentical = false;
-		if (numChannels > 1)
-		{
-			stereoIdentical = (std::memcmp (buffer.getReadPointer (0),
-											buffer.getReadPointer (1),
-											(size_t) numSamples * sizeof (float)) == 0);
-		}
-
-		auto* ch0w = buffer.getWritePointer (0);
-		rvsConvL.processInPlace (ch0w, numSamples);
-
-		if (numChannels > 1)
-		{
-			if (! stereoIdentical)
-				rvsConvR.processInPlace (buffer.getWritePointer (1), numSamples);
-			else
-				std::memcpy (buffer.getWritePointer (1), ch0w, (size_t) numSamples * sizeof (float));
-		}
-
-		// Store last output for next block's feedback
-		feedbackLastL = ch0w[numSamples - 1];
-		if (numChannels > 1)
-			feedbackLastR = buffer.getReadPointer (1)[numSamples - 1];
-
-		if (invEnabled)
-			buffer.applyGain (-1.0f);
-
-		DSP_LOG_BLOCK_END(dspLog, numSamples, currentSampleRate,
-			targetStages, targetSeries, targetFreq, targetShape, 1.0f, true, invEnabled);
-		return;
+	// ── MIDI glide: velocity-dependent EMA coefficient ──────
+	if (midiEnabled && lastMidiNote.load (std::memory_order_relaxed) >= 0)
+	{
+		const float vel  = (float) lastMidiVelocity.load (std::memory_order_relaxed);
+		const float tLin = juce::jlimit (0.0f, 1.0f, (vel - 1.0f) / 126.0f);
+		const float t    = std::pow (tLin, 0.05f);
+		const float tau  = kMidiGlideTauMax - t * (kMidiGlideTauMax - kMidiGlideTauMin);
+		freqEmaCoeff = std::exp (-1.0f / ((float) currentSampleRate * tau));
+	}
+	else
+	{
+		freqEmaCoeff = std::exp (-1.0f / ((float) currentSampleRate * kFreqTauDefault));
 	}
 
 	// ── Direct mode (per-sample all-pass) ────────────────────
@@ -684,14 +389,17 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const bool hasStereo = (ch1 != nullptr);
 	const bool crossfading = (seriesXfadeSamplesRemaining > 0);
 
+	const bool freqConverged = std::abs (smoothedFreqValue - targetFreq) < 0.01f;
+
 	// Fast path: parameters converged + no crossfade → tight inner loop
 	// without per-sample smoothing, coefficient checks, or fractional stages.
 	if (!crossfading
 		&& !stagesSmoothed.isSmoothing()
-		&& !freqSmoothed.isSmoothing()
+		&& freqConverged
 		&& !shapeSmoothed.isSmoothing()
 		&& !feedbackSmoothed.isSmoothing())
 	{
+		smoothedFreqValue = targetFreq;   // snap EMA to avoid drift
 		const int stgs = activeStages;
 		const float fb = feedbackSmoothed.getCurrentValue();
 		if (stgs > 0)
@@ -735,19 +443,15 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			}
 		}
 
-		if (invEnabled)
-			buffer.applyGain (-1.0f);
-
-		DSP_LOG_BLOCK_END(dspLog, numSamples, currentSampleRate,
-			targetStages, targetSeries, targetFreq, targetShape, 0.0f, false, invEnabled);
-		return;
 	}
-
+	else
+	{
 	// Slow path: smoothing active or crossfade in progress
 	for (int n = 0; n < numSamples; ++n)
 	{
 		const float smoothedStages = juce::jlimit (0.0f, (float) kAmountMax, stagesSmoothed.getNextValue());
-		const float smoothedFreq = freqSmoothed.getNextValue();
+		smoothedFreqValue += (targetFreq - smoothedFreqValue) * (1.0f - freqEmaCoeff);
+		const float smoothedFreq = smoothedFreqValue;
 		const float smoothedShape = shapeSmoothed.getNextValue();
 		const float fb = feedbackSmoothed.getNextValue();
 
@@ -896,12 +600,25 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			}
 		}
 	}
+	} // end else (slow path)
 
 	if (invEnabled)
 		buffer.applyGain (-1.0f);
 
+	// ── Dry/Wet blend ───────────────────────────────────────
+	if (needsDryBlend)
+	{
+		for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
+		{
+			const float* dry = dryBuffer.getReadPointer (ch);
+			float* wet = buffer.getWritePointer (ch);
+			for (int n = 0; n < numSamples; ++n)
+				wet[n] = dry[n] + mixValue * (wet[n] - dry[n]);
+		}
+	}
+
 	DSP_LOG_BLOCK_END(dspLog, numSamples, currentSampleRate,
-		targetStages, targetSeries, targetFreq, targetShape, 0.0f, false, invEnabled);
+		targetStages, targetSeries, targetFreq, targetShape, invEnabled);
 }
 
 bool DisperserAudioProcessor::hasEditor() const { return true; }
@@ -928,15 +645,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 		kParamShape, "Shape",
 		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kShapeDefault));
 
-	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamReverse, "Reverse", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamInv, "Inv", false));
-	params.push_back (std::make_unique<juce::AudioParameterFloat> (
-		kParamRvsDecay, "RVS Decay",
-		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kRvsDecayDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamFeedback, "Feedback",
 		juce::NormalisableRange<float> (0.0f, kFeedbackMax, 0.0f, 1.0f), kFeedbackDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamMod, "Mod",
+		juce::NormalisableRange<float> (0.0f, kModMax, 0.0f, 1.0f), kModDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamMix, "Mix",
+		juce::NormalisableRange<float> (0.0f, kMixMax, 0.0f, 1.0f), kMixDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamMidi, "MIDI", false));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS0, "S0", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS100, "S100", false));
@@ -1063,6 +786,7 @@ void DisperserAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 	state.setProperty (UiStateKeys::editorHeight, getUiEditorHeight(), nullptr);
 	state.setProperty (UiStateKeys::useCustomPalette, getUiUseCustomPalette(), nullptr);
 	state.setProperty (UiStateKeys::fxTailEnabled, getUiFxTailEnabled(), nullptr);
+	state.setProperty (UiStateKeys::midiPort, getMidiChannel(), nullptr);
 	for (int i = 0; i < 4; ++i)
 		state.setProperty (UiStateKeys::customPalette[(size_t) i], (int) getUiCustomPaletteColour (i).getARGB(), nullptr);
 
@@ -1088,6 +812,9 @@ void DisperserAudioProcessor::setStateInformation (const void* data, int sizeInB
 	if (! cp.isVoid()) uiUseCustomPalette.store ((bool) cp ? 1 : 0, std::memory_order_relaxed);
 	if (! fx.isVoid()) uiFxTailEnabled.store ((bool) fx ? 1 : 0, std::memory_order_relaxed);
 
+	const auto mp = apvts.state.getProperty (UiStateKeys::midiPort);
+	if (! mp.isVoid()) midiChannel.store (juce::jlimit (0, 16, (int) mp), std::memory_order_relaxed);
+
 	for (int i = 0; i < 4; ++i)
 	{
 		const auto c = apvts.state.getProperty (UiStateKeys::customPalette[(size_t) i]);
@@ -1104,6 +831,42 @@ void DisperserAudioProcessor::getCurrentProgramStateInformation (juce::MemoryBlo
 void DisperserAudioProcessor::setCurrentProgramStateInformation (const void* data, int sizeInBytes)
 {
 	setStateInformation (data, sizeInBytes);
+}
+
+void DisperserAudioProcessor::setMidiChannel (int channel)
+{
+	const int ch = juce::jlimit (0, 16, channel);
+	midiChannel.store (ch, std::memory_order_relaxed);
+	apvts.state.setProperty (UiStateKeys::midiPort, ch, nullptr);
+}
+
+int DisperserAudioProcessor::getMidiChannel() const noexcept
+{
+	return midiChannel.load (std::memory_order_relaxed);
+}
+
+juce::String DisperserAudioProcessor::getMidiNoteName (int midiNote)
+{
+	if (midiNote < 0 || midiNote > 127)
+		return "";
+
+	const char* noteNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+	const int octave = (midiNote / 12) - 1;
+	const int noteIndex = midiNote % 12;
+
+	return juce::String (noteNames[noteIndex]) + juce::String (octave);
+}
+
+juce::String DisperserAudioProcessor::getCurrentFreqDisplay() const
+{
+	const bool midiEnabled = loadBoolParamOrDefault (midiParam, false);
+	const int midiNote = lastMidiNote.load (std::memory_order_relaxed);
+	const bool midiNoteActive = midiEnabled && (midiNote >= 0);
+
+	if (midiNoteActive)
+		return getMidiNoteName (midiNote);
+
+	return "";
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

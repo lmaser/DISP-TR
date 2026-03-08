@@ -30,7 +30,7 @@ private:
     void openNumericEntryPopupForSlider (juce::Slider& s);
     void openInfoPopup();
     void openGraphicsPopup();
-    void openRvsDecayPrompt();
+    void openMidiChannelPrompt();
     void setPromptOverlayActive (bool shouldBeActive);
 
     DisperserAudioProcessor& audioProcessor;
@@ -56,10 +56,23 @@ private:
 
         juce::String getTextFromValue (double v) override
         {
-            if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->feedbackSlider))
+            if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
             {
                 double percent = v * 100.0;
                 juce::String t (percent, 4);
+                if (t.containsChar ('.'))
+                {
+                    while (t.endsWithChar ('0'))
+                        t = t.dropLastCharacters (1);
+                    if (t.endsWithChar ('.'))
+                        t = t.dropLastCharacters (1);
+                }
+                return t;
+            }
+
+            if (owner != nullptr && this == &owner->modSlider)
+            {
+                juce::String t (v, 4);
                 if (t.containsChar ('.'))
                 {
                     while (t.endsWithChar ('0'))
@@ -92,10 +105,12 @@ private:
     BarSlider freqSlider;
     BarSlider shapeSlider;
     BarSlider feedbackSlider;
+    BarSlider modSlider;
+    BarSlider mixSlider;
 
-    juce::ToggleButton rvsButton;
     juce::ToggleButton invButton;
-    juce::Label rvsDisplay;
+    juce::ToggleButton midiButton;
+    juce::Label midiChannelDisplay;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -105,9 +120,11 @@ private:
     std::unique_ptr<SliderAttachment> freqAttachment;
     std::unique_ptr<SliderAttachment> shapeAttachment;
     std::unique_ptr<SliderAttachment> feedbackAttachment;
+    std::unique_ptr<SliderAttachment> modAttachment;
+    std::unique_ptr<SliderAttachment> mixAttachment;
 
-    std::unique_ptr<ButtonAttachment> rvsAttachment;
     std::unique_ptr<ButtonAttachment> invAttachment;
+    std::unique_ptr<ButtonAttachment> midiAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
@@ -223,12 +240,18 @@ private:
     juce::String getSeriesTextShort() const;
 
     juce::String getFreqText() const;
-
+	juce::String getFreqTextShort() const;
     juce::String getShapeText() const;
     juce::String getShapeTextShort() const;
 
     juce::String getFeedbackText() const;
     juce::String getFeedbackTextShort() const;
+
+    juce::String getModText() const;
+    juce::String getModTextShort() const;
+
+    juce::String getMixText() const;
+    juce::String getMixTextShort() const;
     int getTargetValueColumnWidth() const;
 
     void sliderValueChanged (juce::Slider* slider) override;
@@ -243,8 +266,8 @@ private:
 
     juce::Rectangle<int> getValueAreaFor (const juce::Rectangle<int>& barBounds) const;
     juce::Slider* getSliderForValueAreaPoint (juce::Point<int> p);
-    juce::Rectangle<int> getRvsLabelArea() const;
     juce::Rectangle<int> getInvLabelArea() const;
+    juce::Rectangle<int> getMidiLabelArea() const;
     juce::Rectangle<int> getInfoIconArea() const;
     void updateInfoIconCache();
     bool refreshLegendTextCache();
@@ -259,25 +282,35 @@ private:
     juce::String cachedSeriesTextFull;
     juce::String cachedSeriesTextShort;
     juce::String cachedFreqTextHz;
+    juce::String cachedFreqTextShort;
     juce::String cachedFreqIntOnly;
+    juce::String cachedMidiDisplay;
     juce::String cachedShapeTextFull;
     juce::String cachedShapeTextShort;
     juce::String cachedShapeIntOnly;
     juce::String cachedFeedbackTextFull;
     juce::String cachedFeedbackTextShort;
     juce::String cachedFeedbackIntOnly;
+    juce::String cachedModTextFull;
+    juce::String cachedModTextShort;
+    juce::String cachedModIntOnly;
+    juce::String cachedMixTextFull;
+    juce::String cachedMixTextShort;
+    juce::String cachedMixIntOnly;
     mutable std::uint64_t cachedValueColumnWidthKey = 0;
     mutable int cachedValueColumnWidth = 90;
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
-    std::array<juce::Rectangle<int>, 5> cachedValueAreas_;
+    std::array<juce::Rectangle<int>, 7> cachedValueAreas_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
     static constexpr double kDefaultFreq   = (double) DisperserAudioProcessor::kFreqDefault;
     static constexpr double kDefaultShape    = (double) DisperserAudioProcessor::kShapeDefault;
     static constexpr double kDefaultFeedback = (double) DisperserAudioProcessor::kFeedbackDefault;
+    static constexpr double kDefaultMod      = (double) DisperserAudioProcessor::kModDefault;
+    static constexpr double kDefaultMix      = (double) DisperserAudioProcessor::kMixDefault;
 
     static constexpr int kMinW = 360;
     static constexpr int kMinH = 540;
