@@ -5,6 +5,7 @@
 #include <atomic>
 #include <vector>
 #include "DspDebugLog.h"
+#include "UniformConvolver.h"
 
 class DisperserAudioProcessor : public juce::AudioProcessor
 {
@@ -176,9 +177,15 @@ private:
 
 	std::unique_ptr<RvsRebuildThread> rvsRebuildThread;
 
-	juce::dsp::Convolution rvsConvL { juce::dsp::Convolution::Latency { 1024 } };
-	juce::dsp::Convolution rvsConvR { juce::dsp::Convolution::Latency { 1024 } };
-	bool rvsConvPrepared = false;
+	UniformConvolver rvsConvL;
+	UniformConvolver rvsConvR;
+	static constexpr int kRvsPartitionSize = 128;
+	static constexpr int kRvsMaxIrLength   = 2048;
+
+	// Thread-safe IR handoff: rebuild thread writes, audio thread reads
+	std::vector<float> sharedIrBuffer;
+	std::atomic<int>   sharedIrReady { 0 };  // 0=none, >0=new IR length
+
 	bool rvsRebuildPending = false;
 	int rvsRebuildCooldownSamples = 0;
 	int rvsStableSamples = 0;

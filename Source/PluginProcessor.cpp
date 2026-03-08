@@ -195,15 +195,12 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
 
-	juce::dsp::ProcessSpec spec;
-	spec.sampleRate = currentSampleRate;
-	spec.maximumBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
-	spec.numChannels = 1;
+	rvsConvL.prepare (kRvsPartitionSize, kRvsMaxIrLength);
+	rvsConvR.prepare (kRvsPartitionSize, kRvsMaxIrLength);
 
-	rvsConvL.reset();
-	rvsConvR.reset();
-	rvsConvL.prepare (spec);
-	rvsConvR.prepare (spec);
+	// Pre-allocate shared IR buffer for thread-safe handoff
+	sharedIrBuffer.assign ((size_t) kRvsMaxIrLength, 0.0f);
+	sharedIrReady.store (0, std::memory_order_relaxed);
 
 	// Stop any prior rebuild thread before resetting state
 	if (rvsRebuildThread)
@@ -212,20 +209,6 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 		rvsRebuildThread.reset();
 	}
 
-	juce::AudioBuffer<float> identityL (1, 1);
-	juce::AudioBuffer<float> identityR (1, 1);
-	identityL.setSample (0, 0, 1.0f);
-	identityR.setSample (0, 0, 1.0f);
-	rvsConvL.loadImpulseResponse (std::move (identityL), currentSampleRate,
-		juce::dsp::Convolution::Stereo::no,
-		juce::dsp::Convolution::Trim::no,
-		juce::dsp::Convolution::Normalise::no);
-	rvsConvR.loadImpulseResponse (std::move (identityR), currentSampleRate,
-		juce::dsp::Convolution::Stereo::no,
-		juce::dsp::Convolution::Trim::no,
-		juce::dsp::Convolution::Normalise::no);
-
-	rvsConvPrepared = true;
 	rvsRebuildPending = false;
 	rvsRebuildCooldownSamples = 0;
 	rvsStableSamples = 0;
@@ -262,7 +245,6 @@ void DisperserAudioProcessor::releaseResources()
 	stageCoeff.clear();
 	rvsConvL.reset();
 	rvsConvR.reset();
-	rvsConvPrepared = false;
 	rvsRebuildPending = false;
 	rvsRebuildCooldownSamples = 0;
 	rvsStableSamples = 0;
@@ -379,7 +361,7 @@ int DisperserAudioProcessor::computeRvsIrLengthSamples (int stages, int series, 
 	const float d = juce::jlimit (0.0f, 1.0f, decay);
 	const float lengthMult = 0.25f + d * 1.5f; // 0→0.25×, 0.5→1.0× (default), 1.0→1.75×
 	const int len = (int) std::round ((float) fullLen * lengthMult);
-	return juce::jlimit (192, 4096, len);
+	return juce::jlimit (192, 2048, len);
 }
 
 // ── Background IR rebuild thread ─────────────────────────────
@@ -388,8 +370,8 @@ void DisperserAudioProcessor::RvsRebuildThread::run()
 	coeffScratch.reserve ((size_t) kAmountMax);
 	for (auto& sv : stateScratch)
 		sv.assign ((size_t) kAmountMax, {});
-	fwdIrScratch.reserve (4096u);
-	revIrScratch.reserve (4096u);
+	fwdIrScratch.reserve (2048u);
+	revIrScratch.reserve (2048u);
 
 	while (! threadShouldExit())
 	{
@@ -408,12 +390,6 @@ void DisperserAudioProcessor::RvsRebuildThread::run()
 		const float decay = reqDecay .load (std::memory_order_relaxed);
 
 		DSP_LOG_REBUILD_BEGIN();
-
-		if (! proc.rvsConvPrepared)
-		{
-			busy.store (false, std::memory_order_release);
-			continue;
-		}
 
 		const float d = juce::jlimit (0.0f, 1.0f, decay);
 		const int irLength = proc.computeRvsIrLengthSamples (stages, series, d);
@@ -482,20 +458,11 @@ void DisperserAudioProcessor::RvsRebuildThread::run()
 				sample *= gain;
 		}
 
-		// Load into Convolution objects (thread-safe in JUCE)
-		juce::AudioBuffer<float> irBufL (1, irLength);
-		juce::AudioBuffer<float> irBufR (1, irLength);
-		std::memcpy (irBufL.getWritePointer (0), revIrScratch.data(), (size_t) irLength * sizeof (float));
-		std::memcpy (irBufR.getWritePointer (0), revIrScratch.data(), (size_t) irLength * sizeof (float));
-
-		proc.rvsConvL.loadImpulseResponse (std::move (irBufL), proc.currentSampleRate,
-			juce::dsp::Convolution::Stereo::no,
-			juce::dsp::Convolution::Trim::no,
-			juce::dsp::Convolution::Normalise::no);
-		proc.rvsConvR.loadImpulseResponse (std::move (irBufR), proc.currentSampleRate,
-			juce::dsp::Convolution::Stereo::no,
-			juce::dsp::Convolution::Trim::no,
-			juce::dsp::Convolution::Normalise::no);
+		// Store reversed IR in shared buffer for audio thread pickup
+		const int copyLen = juce::jmin (irLength, kRvsMaxIrLength);
+		std::memcpy (proc.sharedIrBuffer.data(), revIrScratch.data(),
+					 (size_t) copyLen * sizeof (float));
+		proc.sharedIrReady.store (copyLen, std::memory_order_release);
 
 		DSP_LOG_REBUILD_END(proc.dspLog, irLength, stages, series, freq, shape, d);
 
@@ -645,30 +612,32 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			rvsRebuildCooldownSamples = (int) std::round ((currentSampleRate * kRvsRebuildMinIntervalMs) / 1000.0);
 		}
 
-		auto block = juce::dsp::AudioBlock<float> (buffer);
-		auto left = block.getSingleChannelBlock (0);
-		juce::dsp::ProcessContextReplacing<float> ctxL (left);
+		// Pick up new IR from rebuild thread if available
+		const int newIrLen = sharedIrReady.exchange (0, std::memory_order_acquire);
+		if (newIrLen > 0)
+		{
+			rvsConvL.loadIR (sharedIrBuffer.data(), newIrLen);
+			rvsConvR.loadIR (sharedIrBuffer.data(), newIrLen);
+		}
 
-		bool processRightIndependently = (numChannels > 1);
+		// Process convolution (uniform cost per partition)
+		bool stereoIdentical = false;
 		if (numChannels > 1)
 		{
-			const auto* leftRead = buffer.getReadPointer (0);
-			const auto* rightRead = buffer.getReadPointer (1);
-			if (std::memcmp (leftRead, rightRead, (size_t) numSamples * sizeof (float)) == 0)
-				processRightIndependently = false;
+			stereoIdentical = (std::memcmp (buffer.getReadPointer (0),
+											buffer.getReadPointer (1),
+											(size_t) numSamples * sizeof (float)) == 0);
 		}
 
-		rvsConvL.process (ctxL);
+		auto* ch0w = buffer.getWritePointer (0);
+		rvsConvL.processInPlace (ch0w, numSamples);
 
-		if (processRightIndependently)
+		if (numChannels > 1)
 		{
-			auto right = block.getSingleChannelBlock (1);
-			juce::dsp::ProcessContextReplacing<float> ctxR (right);
-			rvsConvR.process (ctxR);
-		}
-		else if (numChannels > 1)
-		{
-			std::memcpy (buffer.getWritePointer (1), buffer.getReadPointer (0), (size_t) numSamples * sizeof (float));
+			if (! stereoIdentical)
+				rvsConvR.processInPlace (buffer.getWritePointer (1), numSamples);
+			else
+				std::memcpy (buffer.getWritePointer (1), ch0w, (size_t) numSamples * sizeof (float));
 		}
 
 		if (invEnabled)
