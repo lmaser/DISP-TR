@@ -22,6 +22,7 @@ public:
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
 	static constexpr const char* kParamRvsDecay  = "rvs_decay";
+	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -42,6 +43,8 @@ public:
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
 	static constexpr float kRvsDecayDefault = 0.5f;
+	static constexpr float kFeedbackDefault = 0.0f;
+	static constexpr float kFeedbackMax     = 0.95f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -110,7 +113,7 @@ private:
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
 	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
-	int computeRvsIrLengthSamples (int stages, int series, float decay) const noexcept;
+	int computeRvsIrLengthSamples (int stages, int series) const noexcept;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
@@ -130,6 +133,12 @@ private:
 	int lastCoeffStages = -1;
 	int coeffUpdateCountdown = 0;
 
+	// ── Feedback ──
+	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> feedbackSmoothed;
+	static constexpr double kFeedbackSmoothingSeconds = 0.05;
+	float feedbackLastL = 0.0f;
+	float feedbackLastR = 0.0f;
+
 	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainR;
 	int seriesXfadeSamplesRemaining = 0;
@@ -143,13 +152,12 @@ private:
 		explicit RvsRebuildThread (DisperserAudioProcessor& owner)
 			: juce::Thread ("DISP-TR RVS Rebuild"), proc (owner) {}
 
-		void requestRebuild (int stages, int series, float freq, float shape, float decay) noexcept
+		void requestRebuild (int stages, int series, float freq, float shape) noexcept
 		{
 			reqStages.store (stages, std::memory_order_relaxed);
 			reqSeries.store (series, std::memory_order_relaxed);
 			reqFreq  .store (freq,   std::memory_order_relaxed);
 			reqShape .store (shape,  std::memory_order_relaxed);
-			reqDecay .store (decay,  std::memory_order_relaxed);
 			pending  .store (true,   std::memory_order_release);
 			notify();
 		}
@@ -164,7 +172,6 @@ private:
 		std::atomic<int>   reqSeries { 1 };
 		std::atomic<float> reqFreq   { 1000.0f };
 		std::atomic<float> reqShape  { 0.0f };
-		std::atomic<float> reqDecay  { 0.5f };
 		std::atomic<bool>  pending   { false };
 		std::atomic<bool>  busy      { false };
 
@@ -193,12 +200,10 @@ private:
 	int pendingRvsSeries = -1;
 	float pendingRvsFreq = -1.0f;
 	float pendingRvsShape = -1.0f;
-	float pendingRvsDecay = -1.0f;
 	int lastRvsStages = -1;
 	int lastRvsSeries = -1;
 	float lastRvsFreq = -1.0f;
 	float lastRvsShape = -1.0f;
-	float lastRvsDecay = -1.0f;
 	int lastRvsIrLength = -1;
 	static constexpr int kRvsRebuildMinIntervalMs = 200;
 	static constexpr int kRvsSettleWindowMs = 120;
@@ -214,6 +219,7 @@ private:
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
 	std::atomic<float>* rvsDecayParam = nullptr;
+	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;

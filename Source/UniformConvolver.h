@@ -64,7 +64,6 @@ public:
 			return;
 
 		numParts = juce::jmin (maxParts, (irLength + partSize - 1) / partSize);
-		const int bufSize = fftLen * 2;
 
 		for (int k = 0; k < numParts; ++k)
 		{
@@ -140,8 +139,6 @@ public:
 private:
 	void processPartition()
 	{
-		const int bufSize = fftLen * 2;
-
 		// ── 1. FFT the input partition ───────────────────────
 		auto& curInput = dlFreq[(size_t) dlPos];
 		std::fill (curInput.begin(), curInput.end(), 0.0f);

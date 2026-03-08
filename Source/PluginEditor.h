@@ -56,7 +56,7 @@ private:
 
         juce::String getTextFromValue (double v) override
         {
-            if (owner != nullptr && this == &owner->shapeSlider)
+            if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->feedbackSlider))
             {
                 double percent = v * 100.0;
                 juce::String t (percent, 4);
@@ -91,6 +91,7 @@ private:
     BarSlider seriesSlider;
     BarSlider freqSlider;
     BarSlider shapeSlider;
+    BarSlider feedbackSlider;
 
     juce::ToggleButton rvsButton;
     juce::ToggleButton invButton;
@@ -103,6 +104,7 @@ private:
     std::unique_ptr<SliderAttachment> seriesAttachment;
     std::unique_ptr<SliderAttachment> freqAttachment;
     std::unique_ptr<SliderAttachment> shapeAttachment;
+    std::unique_ptr<SliderAttachment> feedbackAttachment;
 
     std::unique_ptr<ButtonAttachment> rvsAttachment;
     std::unique_ptr<ButtonAttachment> invAttachment;
@@ -224,6 +226,9 @@ private:
 
     juce::String getShapeText() const;
     juce::String getShapeTextShort() const;
+
+    juce::String getFeedbackText() const;
+    juce::String getFeedbackTextShort() const;
     int getTargetValueColumnWidth() const;
 
     void sliderValueChanged (juce::Slider* slider) override;
@@ -258,17 +263,21 @@ private:
     juce::String cachedShapeTextFull;
     juce::String cachedShapeTextShort;
     juce::String cachedShapeIntOnly;
+    juce::String cachedFeedbackTextFull;
+    juce::String cachedFeedbackTextShort;
+    juce::String cachedFeedbackIntOnly;
     mutable std::uint64_t cachedValueColumnWidthKey = 0;
     mutable int cachedValueColumnWidth = 90;
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
-    std::array<juce::Rectangle<int>, 4> cachedValueAreas_;
+    std::array<juce::Rectangle<int>, 5> cachedValueAreas_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
     static constexpr double kDefaultFreq   = (double) DisperserAudioProcessor::kFreqDefault;
-    static constexpr double kDefaultShape  = (double) DisperserAudioProcessor::kShapeDefault;
+    static constexpr double kDefaultShape    = (double) DisperserAudioProcessor::kShapeDefault;
+    static constexpr double kDefaultFeedback = (double) DisperserAudioProcessor::kFeedbackDefault;
 
     static constexpr int kMinW = 360;
     static constexpr int kMinH = 540;
