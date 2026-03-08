@@ -20,6 +20,7 @@ public:
 	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamMod       = "mod";
 	static constexpr const char* kParamMix       = "mix";
+	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
@@ -52,6 +53,10 @@ public:
 	static constexpr float kMixMin     = 0.0f;
 	static constexpr float kMixMax     = 1.0f;
 	static constexpr float kMixDefault = 1.0f;
+
+	static constexpr int kStyleMin     = 0;
+	static constexpr int kStyleMax     = 1;         // 0 = MONO, 1 = STEREO
+	static constexpr float kStyleDefault = 1.0f;    // STEREO by default
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -177,6 +182,7 @@ private:
 	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* modParam = nullptr;
 	std::atomic<float>* mixParam = nullptr;
+	std::atomic<float>* styleParam = nullptr;
 	std::atomic<float>* midiParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;

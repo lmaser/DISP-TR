@@ -53,6 +53,7 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	feedbackParam = apvts.getRawParameterValue (kParamFeedback);
 	modParam = apvts.getRawParameterValue (kParamMod);
 	mixParam = apvts.getRawParameterValue (kParamMix);
+	styleParam = apvts.getRawParameterValue (kParamStyle);
 	midiParam = apvts.getRawParameterValue (kParamMidi);
 	s0Param = apvts.getRawParameterValue (kParamS0);
 	s100Param = apvts.getRawParameterValue (kParamS100);
@@ -342,6 +343,9 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	// ── MIX (dry/wet) ───────────────────────────────────────
 	const float mixValue = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (mixParam, kMixDefault));
 
+	// ── STYLE: 0 = MONO, 1 = STEREO ────────────────────────
+	const int style = juce::jlimit (kStyleMin, kStyleMax, loadIntParamOrDefault (styleParam, (int) kStyleDefault));
+
 	// Save dry input for dry/wet blend (only when mix < 1)
 	juce::AudioBuffer<float> dryBuffer;
 	const bool needsDryBlend = (mixValue < 0.999f);
@@ -407,7 +411,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			for (int n = 0; n < numSamples; ++n)
 			{
 				float xL = ch0[n] + fb * feedbackLastL;
-				float xR = hasStereo ? (ch1[n] + fb * feedbackLastR) : xL;
+				float xR = (hasStereo && style >= 1) ? (ch1[n] + fb * feedbackLastR) : xL;
 
 				for (int s = 0; s < activeSeries; ++s)
 				{
@@ -423,7 +427,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = xL + (a * yL);
 						xL = yL;
 
-						if (hasStereo)
+						if (hasStereo && style >= 1)
 						{
 							auto& sr = rS[st];
 							const float yR = (-a * xR) + sr.z1;
@@ -437,8 +441,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				feedbackLastL = xL;
 				if (hasStereo)
 				{
-					ch1[n] = xR;
-					feedbackLastR = xR;
+					ch1[n] = (style >= 1) ? xR : xL;
+					feedbackLastR = (style >= 1) ? xR : xL;
 				}
 			}
 		}
@@ -483,7 +487,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			}
 
 			const float inputL = ch0[n] + fb * feedbackLastL;
-			const float inputR = hasStereo ? (ch1[n] + fb * feedbackLastR) : inputL;
+			const float inputR = (hasStereo && style >= 1) ? (ch1[n] + fb * feedbackLastR) : inputL;
 
 			// Process through current (new) topology
 			float xL = inputL;
@@ -503,7 +507,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					sl.z1 = xL + (a * yL);
 					xL = yL;
 
-					if (hasStereo)
+					if (hasStereo && style >= 1)
 					{
 						auto& sr = rStages[st];
 						const float yR = (-a * xR) + sr.z1;
@@ -523,7 +527,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					sl.z1 = inL + (a * yL);
 					xL = inL + (stageFrac * (yL - inL));
 
-					if (hasStereo)
+					if (hasStereo && style >= 1)
 					{
 						const float inR = xR;
 						auto& sr = rStages[st];
@@ -554,7 +558,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = xfL + (a * yL);
 						xfL = yL;
 
-						if (hasStereo)
+						if (hasStereo && style >= 1)
 						{
 							auto& sr = rStages[st];
 							const float yR = (-a * xfR) + sr.z1;
@@ -574,7 +578,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = inL + (a * yL);
 						xfL = inL + (stageFrac * (yL - inL));
 
-						if (hasStereo)
+						if (hasStereo && style >= 1)
 						{
 							const float inR = xfR;
 							auto& sr = rStages[st];
@@ -595,8 +599,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			feedbackLastL = xL;
 			if (hasStereo)
 			{
-				ch1[n] = xR;
-				feedbackLastR = xR;
+				ch1[n] = (style >= 1) ? xR : xL;
+				feedbackLastR = (style >= 1) ? xR : xL;
 			}
 		}
 	}
@@ -658,6 +662,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamMix, "Mix",
 		juce::NormalisableRange<float> (0.0f, kMixMax, 0.0f, 1.0f), kMixDefault));
+
+		// Style: 0 = Mono, 1 = Stereo
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamStyle, "Style",
+		juce::NormalisableRange<float> ((float) kStyleMin, (float) kStyleMax, 1.0f, 1.0f), kStyleDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamMidi, "MIDI", false));
 

@@ -41,10 +41,11 @@ private:
         using juce::Slider::Slider;
 
         void setOwner (DisperserAudioProcessorEditor* o) { owner = o; }
+        void setAllowNumericPopup (bool allow) { allowNumericPopup = allow; }
 
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (e.mods.isPopupMenu())
+            if (e.mods.isPopupMenu() && allowNumericPopup)
             {
                 if (owner != nullptr)
                     owner->openNumericEntryPopupForSlider (*this);
@@ -98,12 +99,14 @@ private:
 
     private:
         DisperserAudioProcessorEditor* owner = nullptr;
+        bool allowNumericPopup = true;
     };
 
     BarSlider amountSlider;
     BarSlider seriesSlider;
     BarSlider freqSlider;
     BarSlider shapeSlider;
+    BarSlider styleSlider;
     BarSlider feedbackSlider;
     BarSlider modSlider;
     BarSlider mixSlider;
@@ -119,6 +122,7 @@ private:
     std::unique_ptr<SliderAttachment> seriesAttachment;
     std::unique_ptr<SliderAttachment> freqAttachment;
     std::unique_ptr<SliderAttachment> shapeAttachment;
+    std::unique_ptr<SliderAttachment> styleAttachment;
     std::unique_ptr<SliderAttachment> feedbackAttachment;
     std::unique_ptr<SliderAttachment> modAttachment;
     std::unique_ptr<SliderAttachment> mixAttachment;
@@ -244,6 +248,9 @@ private:
     juce::String getShapeText() const;
     juce::String getShapeTextShort() const;
 
+    juce::String getStyleText() const;
+    juce::String getStyleTextShort() const;
+
     juce::String getFeedbackText() const;
     juce::String getFeedbackTextShort() const;
 
@@ -288,6 +295,8 @@ private:
     juce::String cachedShapeTextFull;
     juce::String cachedShapeTextShort;
     juce::String cachedShapeIntOnly;
+    juce::String cachedStyleTextFull;
+    juce::String cachedStyleTextShort;
     juce::String cachedFeedbackTextFull;
     juce::String cachedFeedbackTextShort;
     juce::String cachedFeedbackIntOnly;
@@ -302,7 +311,7 @@ private:
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
-    std::array<juce::Rectangle<int>, 7> cachedValueAreas_;
+    std::array<juce::Rectangle<int>, 8> cachedValueAreas_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
@@ -311,6 +320,7 @@ private:
     static constexpr double kDefaultFeedback = (double) DisperserAudioProcessor::kFeedbackDefault;
     static constexpr double kDefaultMod      = (double) DisperserAudioProcessor::kModDefault;
     static constexpr double kDefaultMix      = (double) DisperserAudioProcessor::kMixDefault;
+    static constexpr double kDefaultStyle    = (double) DisperserAudioProcessor::kStyleDefault;
 
     static constexpr int kMinW = 360;
     static constexpr int kMinH = 540;

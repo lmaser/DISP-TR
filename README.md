@@ -30,6 +30,7 @@ The value column to the right of each slider shows the current state in context:
 - STAGES shows the number of active all-pass stages.
 - SERIES shows the number of cascaded chains.
 - SHAPE shows the distribution percentage.
+- STYLE shows the stereo mode (MONO or STEREO).
 - MIX shows dry/wet percentage.
 
 ## Parameters
@@ -71,6 +72,12 @@ Series changes use a 20 ms crossfade to avoid clicks.
 Controls how spread or warped the per-stage frequency distribution is around FREQUENCY.  
 At 0% all stages share the same coefficient. Higher values fan the stages out across the spectrum.  
 Smoothed linearly (50 ms time constant).
+
+### STYLE (MONO / STEREO)
+
+Controls the stereo processing mode:
+- **MONO**: Only the left channel is processed; the result is copied to the right channel.
+- **STEREO** (default): Both channels are processed independently with identical coefficients.
 
 ### MIX (0–100%)
 
