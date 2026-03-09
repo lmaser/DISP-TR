@@ -19,6 +19,8 @@ public:
 	static constexpr const char* kParamInv       = "inv";
 	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamMod       = "mod";
+	static constexpr const char* kParamInput     = "input";
+	static constexpr const char* kParamOutput    = "output";
 	static constexpr const char* kParamMix       = "mix";
 	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
@@ -50,6 +52,14 @@ public:
 	static constexpr float kModMin     = 0.0f;
 	static constexpr float kModMax     = 1.0f;
 	static constexpr float kModDefault = 0.5f;
+	static constexpr float kInputMin     = -100.0f;
+	static constexpr float kInputMax     = 0.0f;
+	static constexpr float kInputDefault = 0.0f;
+
+	static constexpr float kOutputMin     = -100.0f;
+	static constexpr float kOutputMax     = 24.0f;
+	static constexpr float kOutputDefault = 0.0f;
+
 	static constexpr float kMixMin     = 0.0f;
 	static constexpr float kMixMax     = 1.0f;
 	static constexpr float kMixDefault = 1.0f;
@@ -104,6 +114,9 @@ public:
 	void setMidiChannel (int channel);
 	int getMidiChannel() const noexcept;
 
+	void setUiIoExpanded (bool expanded);
+	bool getUiIoExpanded() const noexcept;
+
 	static juce::String getMidiNoteName (int midiNote);
 	juce::String getCurrentFreqDisplay() const;
 
@@ -123,6 +136,7 @@ private:
 		static constexpr const char* useCustomPalette = "uiUseCustomPalette";
 		static constexpr const char* fxTailEnabled = "uiFxTailEnabled";
 		static constexpr const char* midiPort = "midiPort";
+		static constexpr const char* ioExpanded = "uiIoExpanded";
 		static constexpr std::array<const char*, 4> customPalette {
 			"uiCustomPalette0", "uiCustomPalette1", "uiCustomPalette2", "uiCustomPalette3"
 		};
@@ -174,6 +188,13 @@ private:
 
 	double currentSampleRate = 44100.0;
 
+	// ── Input / Output / Mix gain smoothing (same as ECHO-TR) ──
+	float smoothedInputGain = 1.0f;
+	float smoothedOutputGain = 1.0f;
+	float smoothedMix = 1.0f;
+
+	std::atomic<float>* inputParam = nullptr;
+	std::atomic<float>* outputParam = nullptr;
 	std::atomic<float>* amountParam = nullptr;
 	std::atomic<float>* seriesParam = nullptr;
 	std::atomic<float>* freqParam = nullptr;

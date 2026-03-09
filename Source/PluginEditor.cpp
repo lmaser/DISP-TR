@@ -39,6 +39,8 @@ static juce::String formatBarFrequencyHzText (double hz)
     return juce::String (safeHz, 3) + " Hz";
 }
 
+static constexpr float kSilenceDb    = -80.0f;
+
 static constexpr double kModCenter  = 0.5;
 static constexpr double kModScale   = 3.0;
 static constexpr double kModMaxMult = 4.0;
@@ -289,10 +291,11 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawTooltip (juce::Graphics& g,
 DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProcessor& p)
 : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    const std::array<BarSlider*, 8> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &mixSlider };
+    const std::array<BarSlider*, 10> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &mixSlider };
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
     crtEnabled = audioProcessor.getUiFxTailEnabled();
+    ioSectionExpanded_ = audioProcessor.getUiIoExpanded();
 
     for (int i = 0; i < 2; ++i)
         customPalette[(size_t) i] = audioProcessor.getUiCustomPaletteColour (i);
@@ -345,7 +348,14 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     feedbackSlider.setNumDecimalPlacesToDisplay (2);
     modSlider.setNumDecimalPlacesToDisplay (2);
     styleSlider.setNumDecimalPlacesToDisplay (0);
+    inputSlider.setNumDecimalPlacesToDisplay (1);
+    outputSlider.setNumDecimalPlacesToDisplay (1);
     mixSlider.setNumDecimalPlacesToDisplay (2);
+
+    // IO sliders start hidden (collapsible section, collapsed by default)
+    inputSlider.setVisible (false);
+    outputSlider.setVisible (false);
+    mixSlider.setVisible (false);
 
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
@@ -389,6 +399,8 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindSlider (styleAttachment, DisperserAudioProcessor::kParamStyle, styleSlider, kDefaultStyle);
     bindSlider (feedbackAttachment, DisperserAudioProcessor::kParamFeedback, feedbackSlider, kDefaultFeedback);
     bindSlider (modAttachment, DisperserAudioProcessor::kParamMod, modSlider, kDefaultMod);
+    bindSlider (inputAttachment, DisperserAudioProcessor::kParamInput, inputSlider, kDefaultInput);
+    bindSlider (outputAttachment, DisperserAudioProcessor::kParamOutput, outputSlider, kDefaultOutput);
     bindSlider (mixAttachment, DisperserAudioProcessor::kParamMix, mixSlider, kDefaultMix);
 
     auto bindButton = [&] (std::unique_ptr<ButtonAttachment>& attachment,
@@ -447,7 +459,7 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     dismissEditorOwnedModalPrompts (lnf);
     setPromptOverlayActive (false);
 
-    const std::array<BarSlider*, 8> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &mixSlider };
+    const std::array<BarSlider*, 10> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &mixSlider };
     for (auto* slider : barSliders)
         slider->removeListener (this);
 
@@ -489,7 +501,7 @@ void DisperserAudioProcessorEditor::sliderValueChanged (juce::Slider* slider)
 {
     auto isBarSlider = [&] (const juce::Slider* s)
     {
-        return s == &amountSlider || s == &seriesSlider || s == &freqSlider || s == &shapeSlider || s == &styleSlider || s == &feedbackSlider || s == &modSlider || s == &mixSlider;
+        return s == &amountSlider || s == &seriesSlider || s == &freqSlider || s == &shapeSlider || s == &styleSlider || s == &feedbackSlider || s == &modSlider || s == &inputSlider || s == &outputSlider || s == &mixSlider;
     };
 
     refreshLegendTextCache();
@@ -522,8 +534,8 @@ void DisperserAudioProcessorEditor::setPromptOverlayActive (bool shouldBeActive)
         promptOverlay.toFront (false);
 
     const bool enableControls = ! shouldBeActive;
-    const std::array<juce::Component*, 10> interactiveControls {
-        &amountSlider, &seriesSlider, &freqSlider, &shapeSlider, &styleSlider, &feedbackSlider, &modSlider, &mixSlider, &invButton, &midiButton
+    const std::array<juce::Component*, 12> interactiveControls {
+        &amountSlider, &seriesSlider, &freqSlider, &shapeSlider, &styleSlider, &feedbackSlider, &modSlider, &inputSlider, &outputSlider, &mixSlider, &invButton, &midiButton
     };
     for (auto* control : interactiveControls)
         control->setEnabled (enableControls);
@@ -669,6 +681,14 @@ void DisperserAudioProcessorEditor::applyPersistedUiStateFromProcessor (bool app
         const bool paletteSwitchChanged = (useCustomPalette != targetUseCustomPalette);
         const bool fxChanged = (crtEnabled != targetCrtEnabled);
 
+        const bool targetIoExpanded = audioProcessor.getUiIoExpanded();
+        const bool ioChanged = (ioSectionExpanded_ != targetIoExpanded);
+        if (ioChanged)
+        {
+            ioSectionExpanded_ = targetIoExpanded;
+            resized();
+        }
+
         if (paletteSwitchChanged)
             useCustomPalette = targetUseCustomPalette;
 
@@ -678,7 +698,7 @@ void DisperserAudioProcessorEditor::applyPersistedUiStateFromProcessor (bool app
         if (paletteChanged || paletteSwitchChanged)
             applyActivePalette();
 
-        if (paletteChanged || paletteSwitchChanged || fxChanged)
+        if (paletteChanged || paletteSwitchChanged || fxChanged || ioChanged)
             repaint();
     }
 }
@@ -712,6 +732,10 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const auto oldModShortLen = cachedModTextShort.length();
     const auto oldMixFullLen = cachedMixTextFull.length();
     const auto oldMixShortLen = cachedMixTextShort.length();
+    const auto oldInputFullLen = cachedInputTextFull.length();
+    const auto oldInputShortLen = cachedInputTextShort.length();
+    const auto oldOutputFullLen = cachedOutputTextFull.length();
+    const auto oldOutputShortLen = cachedOutputTextShort.length();
 
     cachedAmountTextFull  = juce::String (amountV) + " STAGES";
     cachedAmountTextShort = juce::String (amountV) + " STG";
@@ -759,6 +783,26 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedMixTextShort = juce::String (mixPct) + "% MX";
     cachedMixIntOnly = juce::String (mixPct);
 
+    cachedInputTextFull = getInputText();
+    cachedInputTextShort = getInputTextShort();
+    {
+        const float inDb = (float) inputSlider.getValue();
+        if (inDb <= kSilenceDb)
+            cachedInputIntOnly = "-INF";
+        else
+            cachedInputIntOnly = juce::String (inDb, 1) + "dB";
+    }
+
+    cachedOutputTextFull = getOutputText();
+    cachedOutputTextShort = getOutputTextShort();
+    {
+        const float outDb = (float) outputSlider.getValue();
+        if (outDb <= kSilenceDb)
+            cachedOutputIntOnly = "-INF";
+        else
+            cachedOutputIntOnly = juce::String (outDb, 1) + "dB";
+    }
+
     const bool lengthChanged = oldAmountFullLen  != cachedAmountTextFull.length()
                             || oldAmountShortLen != cachedAmountTextShort.length()
                             || oldSeriesFullLen  != cachedSeriesTextFull.length()
@@ -774,7 +818,11 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
                             || oldModFullLen    != cachedModTextFull.length()
                             || oldModShortLen   != cachedModTextShort.length()
                             || oldMixFullLen    != cachedMixTextFull.length()
-                            || oldMixShortLen   != cachedMixTextShort.length();
+                            || oldMixShortLen   != cachedMixTextShort.length()
+                            || oldInputFullLen   != cachedInputTextFull.length()
+                            || oldInputShortLen  != cachedInputTextShort.length()
+                            || oldOutputFullLen   != cachedOutputTextFull.length()
+                            || oldOutputShortLen  != cachedOutputTextShort.length();
 
     return lengthChanged;
 }
@@ -1219,6 +1267,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     else if (&s == &feedbackSlider){ suffix = " % FEEDBACK"; suffixShort = " % FBK"; }
     else if (&s == &modSlider)     { suffix = " X MOD";   suffixShort = " X"; }
     else if (&s == &mixSlider)     { suffix = " % MIX";   suffixShort = " %"; }
+    else if (&s == &inputSlider)   { suffix = " dB INPUT"; suffixShort = " dB"; }
+    else if (&s == &outputSlider)  { suffix = " dB OUTPUT"; suffixShort = " dB"; }
 
     const juce::String suffixText = suffix.trimStart();
     const juce::String suffixTextShort = suffixShort.trimStart();
@@ -1241,6 +1291,10 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 4);
     else if (&s == &modSlider)
         currentDisplay = juce::String (modSliderToMultiplier (s.getValue()), 2);
+    else if (&s == &inputSlider)
+        currentDisplay = juce::String (s.getValue(), 1);
+    else if (&s == &outputSlider)
+        currentDisplay = juce::String (s.getValue(), 1);
     else
         currentDisplay = s.getTextFromValue (s.getValue());
 
@@ -1277,6 +1331,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         else if (&s == &feedbackSlider)worstCaseText = "100.0000";
         else if (&s == &mixSlider)     worstCaseText = "100.0000";
         else if (&s == &modSlider)     worstCaseText = "4.00";
+        else if (&s == &inputSlider)   worstCaseText = "-100.0";
+        else if (&s == &outputSlider)  worstCaseText = "-100.0";
         else                           worstCaseText = "999.99";
 
         const int maxInputTextW = juce::jmax (1, stringWidth (f, worstCaseText));
@@ -1395,6 +1451,20 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             maxVal = 4.0;
             maxDecs = 2;
             maxLen = 4;
+        }
+        else if (&s == &inputSlider)
+        {
+            minVal = -100.0;
+            maxVal = 0.0;
+            maxDecs = 1;
+            maxLen = 6;
+        }
+        else if (&s == &outputSlider)
+        {
+            minVal = -100.0;
+            maxVal = 24.0;
+            maxDecs = 1;
+            maxLen = 6;
         }
 
         te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs), true);
@@ -2335,6 +2405,46 @@ juce::String DisperserAudioProcessorEditor::getMixTextShort() const
     return juce::String (pctInt) + "% MX";
 }
 
+juce::String DisperserAudioProcessorEditor::getInputText() const
+{
+    const float db = (float) inputSlider.getValue();
+    if (db <= kSilenceDb)
+        return "-INF dB INPUT";
+    if (std::abs (db) < 0.05f)
+        return "0 dB INPUT";
+    return juce::String (db, 1) + " dB INPUT";
+}
+
+juce::String DisperserAudioProcessorEditor::getInputTextShort() const
+{
+    const float db = (float) inputSlider.getValue();
+    if (db <= kSilenceDb)
+        return "-INF dB IN";
+    if (std::abs (db) < 0.05f)
+        return "0 dB IN";
+    return juce::String (db, 1) + " dB IN";
+}
+
+juce::String DisperserAudioProcessorEditor::getOutputText() const
+{
+    const float db = (float) outputSlider.getValue();
+    if (db <= kSilenceDb)
+        return "-INF dB OUTPUT";
+    if (std::abs (db) < 0.05f)
+        return "0 dB OUTPUT";
+    return juce::String (db, 1) + " dB OUTPUT";
+}
+
+juce::String DisperserAudioProcessorEditor::getOutputTextShort() const
+{
+    const float db = (float) outputSlider.getValue();
+    if (db <= kSilenceDb)
+        return "-INF dB OUT";
+    if (std::abs (db) < 0.05f)
+        return "0 dB OUT";
+    return juce::String (db, 1) + " dB OUT";
+}
+
 namespace
 {
     constexpr const char* kAmountLegendFull  = "256 STAGES";
@@ -2365,6 +2475,14 @@ namespace
     constexpr const char* kModLegendShort = "X4.00";
     constexpr const char* kModLegendInt   = "X4";
 
+    constexpr const char* kInputLegendFull  = "-100.0 dB INPUT";
+    constexpr const char* kInputLegendShort = "-100.0 dB IN";
+    constexpr const char* kInputLegendInt   = "-100.0dB";
+
+    constexpr const char* kOutputLegendFull  = "-100.0 dB OUTPUT";
+    constexpr const char* kOutputLegendShort = "-100.0 dB OUT";
+    constexpr const char* kOutputLegendInt   = "-100.0dB";
+
     constexpr const char* kMixLegendFull  = "100% MIX";
     constexpr const char* kMixLegendShort = "100% MX";
     constexpr const char* kMixLegendInt   = "100";
@@ -2390,7 +2508,7 @@ DisperserAudioProcessorEditor::buildHorizontalLayout (int editorW, int valueColW
 }
 
 DisperserAudioProcessorEditor::VerticalLayoutMetrics
-DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY)
+DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool ioExpanded)
 {
     VerticalLayoutMetrics m;
     m.rhythm = juce::jlimit (6, 16, (int) std::round (editorH * 0.018));
@@ -2410,34 +2528,59 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY)
     m.btnY = editorH - m.bottomMargin - m.box;
     m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
 
-    const int nominalStack = 8 * nominalBarH + 7 * nominalGapY;
-    const double stackScale = nominalStack > 0 ? juce::jmin (1.0, (double) m.availableForSliders / (double) nominalStack)
+    // Expanded: 10 bars + 11 gaps (9 inter-slider + 2 toggle padding).
+    // Collapsed: 7 bars + 7 gaps (6 inter-slider + 1 toggle-to-slider).
+    //            The toggle bar (20px fixed) is subtracted from available space
+    //            BEFORE scaling so bars/gaps don't overflow.
+    const int numSliders = ioExpanded ? 10 : 7;
+    const int numGaps    = ioExpanded ? 11 : 7;
+
+    m.toggleBarH = 20;  // fixed visual height for click area
+    const int spaceForScale = ioExpanded ? m.availableForSliders
+                                         : juce::jmax (40, m.availableForSliders - m.toggleBarH);
+
+    const int nominalStack = numSliders * nominalBarH + numGaps * nominalGapY;
+    const double stackScale = nominalStack > 0 ? juce::jmin (1.0, (double) spaceForScale / (double) nominalStack)
                                                : 1.0;
 
     m.barH = juce::jmax (14, (int) std::round (nominalBarH * stackScale));
     m.gapY = juce::jmax (4,  (int) std::round (nominalGapY * stackScale));
 
-    auto stackHeight = [&]() { return 8 * m.barH + 7 * m.gapY; };
+    auto stackHeight = [&]() { return numSliders * m.barH + numGaps * m.gapY; };
 
-    while (stackHeight() > m.availableForSliders && m.gapY > 4)
+    while (stackHeight() > spaceForScale && m.gapY > 4)
         --m.gapY;
 
-    while (stackHeight() > m.availableForSliders && m.barH > 14)
+    while (stackHeight() > spaceForScale && m.barH > 14)
         --m.barH;
 
     m.topY = m.topMargin;
+
+    if (ioExpanded)
+        m.toggleBarY = m.topY + 3 * m.barH + 3 * m.gapY;
+    else
+        m.toggleBarY = m.topY;  // collapsed: toggle bar flush with content top
+
     return m;
 }
 
 void DisperserAudioProcessorEditor::updateCachedLayout()
 {
     cachedHLayout_ = buildHorizontalLayout (getWidth(), getTargetValueColumnWidth());
-    cachedVLayout_ = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx);
+    cachedVLayout_ = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx, ioSectionExpanded_);
 
-    const juce::Slider* sliders[8] = { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &mixSlider };
+    const juce::Slider* sliders[10] = { &freqSlider, &modSlider, &feedbackSlider, &amountSlider,
+                                         &seriesSlider, &shapeSlider, &styleSlider,
+                                         &inputSlider, &outputSlider, &mixSlider };
 
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 10; ++i)
     {
+        if (! sliders[i]->isVisible())
+        {
+            cachedValueAreas_[(size_t) i] = {};
+            continue;
+        }
+
         const auto& bb = sliders[i]->getBounds();
         const int valueX = bb.getRight() + cachedHLayout_.valuePad;
         const int maxW = juce::jmax (0, getWidth() - valueX - kValueAreaRightMarginPx);
@@ -2445,6 +2588,10 @@ void DisperserAudioProcessorEditor::updateCachedLayout()
         const int y    = bb.getCentreY() - (kValueAreaHeightPx / 2);
         cachedValueAreas_[(size_t) i] = { valueX, y, juce::jmax (0, vw), kValueAreaHeightPx };
     }
+
+    // Cache toggle bar area
+    cachedToggleBarArea_ = { cachedHLayout_.leftX, cachedVLayout_.toggleBarY,
+                             cachedHLayout_.contentW, cachedVLayout_.toggleBarH };
 }
 
 int DisperserAudioProcessorEditor::getTargetValueColumnWidth() const
@@ -2496,14 +2643,24 @@ int DisperserAudioProcessorEditor::getTargetValueColumnWidth() const
                                     juce::jmax (stringWidth (font, kMixLegendShort),
                                                 stringWidth (font, kMixLegendInt)));
 
+    const int inputMaxW = juce::jmax (stringWidth (font, kInputLegendFull),
+                                      juce::jmax (stringWidth (font, kInputLegendShort),
+                                                  stringWidth (font, kInputLegendInt)));
+
+    const int outputMaxW = juce::jmax (stringWidth (font, kOutputLegendFull),
+                                       juce::jmax (stringWidth (font, kOutputLegendShort),
+                                                   stringWidth (font, kOutputLegendInt)));
+
     const int maxW = juce::jmax (juce::jmax (amountMaxW, seriesMaxW),
                                  juce::jmax (juce::jmax (freqMaxW, shapeMaxW),
                                              juce::jmax (juce::jmax (feedbackMaxW, modMaxW),
-                                                         juce::jmax (styleMaxW, mixMaxW))));
+                                                         juce::jmax (juce::jmax (styleMaxW, mixMaxW),
+                                                                     juce::jmax (inputMaxW, outputMaxW)))));
 
     const int desired = maxW + 16;
     const int minW = 90;
-    const int maxAllowed = juce::jmax (minW, getWidth() / 3);
+    // Allow up to 40% of editor width for longer legends (INPUT/OUTPUT with dB units)
+    const int maxAllowed = juce::jmax (minW, (int) std::round (getWidth() * 0.40));
     cachedValueColumnWidth = juce::jlimit (minW, maxAllowed, desired);
     cachedValueColumnWidthKey = key;
     return cachedValueColumnWidth;
@@ -2545,6 +2702,12 @@ juce::Slider* DisperserAudioProcessorEditor::getSliderForValueAreaPoint (juce::P
 
     if (getValueAreaFor (modSlider.getBounds()).contains (p))
         return &modSlider;
+
+    if (getValueAreaFor (inputSlider.getBounds()).contains (p))
+        return &inputSlider;
+
+    if (getValueAreaFor (outputSlider.getBounds()).contains (p))
+        return &outputSlider;
 
     if (getValueAreaFor (mixSlider.getBounds()).contains (p))
         return &mixSlider;
@@ -2610,7 +2773,7 @@ juce::Rectangle<int> DisperserAudioProcessorEditor::getInfoIconArea() const
 {
     const auto amountValueArea = getValueAreaFor (amountSlider.getBounds());
     const int contentRight = amountValueArea.getRight();
-    const auto verticalLayout = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx);
+    const auto verticalLayout = buildVerticalLayout (getHeight(), kLayoutVerticalBiasPx, ioSectionExpanded_);
     const int titleH = verticalLayout.titleH;
     const int titleY = verticalLayout.titleTopPad;
     const int titleAreaH = verticalLayout.titleAreaH;
@@ -2625,6 +2788,16 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     lastUserInteractionMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
     const auto p = e.getEventRelativeTo (this).getPosition();
+
+    // Toggle IO section expand/collapse
+    if (cachedToggleBarArea_.contains (p))
+    {
+        ioSectionExpanded_ = ! ioSectionExpanded_;
+        audioProcessor.setUiIoExpanded (ioSectionExpanded_);
+        resized();
+        repaint();
+        return;
+    }
 
     if (e.mods.isPopupMenu())
     {
@@ -2676,6 +2849,8 @@ void DisperserAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& e)
         else if (slider == &styleSlider)      slider->setValue (kDefaultStyle, juce::sendNotificationSync);
         else if (slider == &feedbackSlider)   slider->setValue (kDefaultFeedback, juce::sendNotificationSync);
         else if (slider == &modSlider)        slider->setValue (kDefaultMod, juce::sendNotificationSync);
+        else if (slider == &inputSlider)      slider->setValue (kDefaultInput, juce::sendNotificationSync);
+        else if (slider == &outputSlider)     slider->setValue (kDefaultOutput, juce::sendNotificationSync);
         else if (slider == &mixSlider)        slider->setValue (kDefaultMix, juce::sendNotificationSync);
         return;
     }
@@ -2808,16 +2983,54 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         g.setFont (kBoldFont40());
     }
 
+    // ── Toggle bar (triangle + rounded horizontal bar) ──
     {
-        const juce::String* fullTexts[8]  = { &cachedFreqTextHz, &cachedModTextFull,
-                                               &cachedFeedbackTextFull, &cachedAmountTextFull,
-                                               &cachedSeriesTextFull, &cachedShapeTextFull,
-                                               &cachedStyleTextFull, &cachedMixTextFull };
-        const juce::String* shortTexts[8] = { &cachedFreqTextShort, &cachedModTextShort,
-                                               &cachedFeedbackTextShort, &cachedAmountTextShort,
-                                               &cachedSeriesTextShort, &cachedShapeTextShort,
-                                               &cachedStyleTextShort, &cachedMixTextShort };
-        const juce::String intTexts[8] = {
+        if (! cachedToggleBarArea_.isEmpty())
+        {
+            const float barRadius = (float) cachedToggleBarArea_.getHeight() * 0.3f;
+            g.setColour (scheme.fg.withAlpha (0.25f));
+            g.fillRoundedRectangle (cachedToggleBarArea_.toFloat(), barRadius);
+
+            // Triangle indicator — centered, palette-coloured
+            const float triH = (float) cachedToggleBarArea_.getHeight() * 0.8f;
+            const float triW = triH * 1.125f;
+            const float cx = (float) cachedToggleBarArea_.getCentreX();
+            const float cy = (float) cachedToggleBarArea_.getCentreY();
+
+            juce::Path tri;
+            if (ioSectionExpanded_)
+            {
+                // ▲ pointing up (collapse)
+                tri.addTriangle (cx - triW * 0.5f, cy + triH * 0.35f,
+                                 cx + triW * 0.5f, cy + triH * 0.35f,
+                                 cx,               cy - triH * 0.35f);
+            }
+            else
+            {
+                // ▼ pointing down (expand)
+                tri.addTriangle (cx - triW * 0.5f, cy - triH * 0.35f,
+                                 cx + triW * 0.5f, cy - triH * 0.35f,
+                                 cx,               cy + triH * 0.35f);
+            }
+            g.setColour (scheme.text);
+            g.fillPath (tri);
+        }
+    }
+
+    {
+        const juce::String* fullTexts[10]  = { &cachedFreqTextHz, &cachedModTextFull,
+                                                &cachedFeedbackTextFull, &cachedAmountTextFull,
+                                                &cachedSeriesTextFull, &cachedShapeTextFull,
+                                                &cachedStyleTextFull,
+                                                &cachedInputTextFull, &cachedOutputTextFull,
+                                                &cachedMixTextFull };
+        const juce::String* shortTexts[10] = { &cachedFreqTextShort, &cachedModTextShort,
+                                                &cachedFeedbackTextShort, &cachedAmountTextShort,
+                                                &cachedSeriesTextShort, &cachedShapeTextShort,
+                                                &cachedStyleTextShort,
+                                                &cachedInputTextShort, &cachedOutputTextShort,
+                                                &cachedMixTextShort };
+        const juce::String intTexts[10] = {
             cachedFreqIntOnly,
             cachedModIntOnly,
             cachedFeedbackIntOnly,
@@ -2825,10 +3038,12 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             juce::String ((int) seriesSlider.getValue()),
             cachedShapeIntOnly,
             getStyleTextShort(),
+            cachedInputIntOnly,
+            cachedOutputIntOnly,
             cachedMixIntOnly
         };
 
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 10; ++i)
             drawLegendForMode (cachedValueAreas_[(size_t) i], *fullTexts[i], *shortTexts[i], intTexts[i]);
     }
 
@@ -2935,16 +3150,52 @@ void DisperserAudioProcessorEditor::resized()
     }
 
     const auto horizontalLayout = buildHorizontalLayout (W, getTargetValueColumnWidth());
-    const auto verticalLayout = buildVerticalLayout (H, kLayoutVerticalBiasPx);
+    const auto verticalLayout = buildVerticalLayout (H, kLayoutVerticalBiasPx, ioSectionExpanded_);
 
-    freqSlider.setBounds      (horizontalLayout.leftX, verticalLayout.topY + 0 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    modSlider.setBounds       (horizontalLayout.leftX, verticalLayout.topY + 1 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    feedbackSlider.setBounds  (horizontalLayout.leftX, verticalLayout.topY + 2 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    amountSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 3 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    seriesSlider.setBounds    (horizontalLayout.leftX, verticalLayout.topY + 4 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    shapeSlider.setBounds     (horizontalLayout.leftX, verticalLayout.topY + 5 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    styleSlider.setBounds     (horizontalLayout.leftX, verticalLayout.topY + 6 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
-    mixSlider.setBounds       (horizontalLayout.leftX, verticalLayout.topY + 7 * (verticalLayout.barH + verticalLayout.gapY), horizontalLayout.barW, verticalLayout.barH);
+    // Position sliders based on IO section expanded/collapsed state
+    if (ioSectionExpanded_)
+    {
+        // Expanded: INPUT, OUTPUT, MIX → [toggle bar] → FREQ, MOD, FEEDBACK, STAGES, SERIES, SHAPE, STYLE
+        int y = verticalLayout.topY;
+        inputSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        outputSlider.setBounds (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        mixSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH;
+        // padding + toggle bar + padding
+        y += verticalLayout.gapY;  // padding above
+        y += verticalLayout.gapY;  // toggle bar
+        y += verticalLayout.gapY;  // padding below
+        freqSlider.setBounds      (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        modSlider.setBounds       (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        feedbackSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        amountSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        seriesSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        shapeSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        styleSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);
+
+        inputSlider.setVisible (true);
+        outputSlider.setVisible (true);
+        mixSlider.setVisible (true);
+    }
+    else
+    {
+        // Collapsed: sliders start after toggle bar + gap
+        int y = verticalLayout.toggleBarY + verticalLayout.toggleBarH + verticalLayout.gapY;
+        freqSlider.setBounds      (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        modSlider.setBounds       (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        feedbackSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        amountSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        seriesSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        shapeSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
+        styleSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);
+
+        inputSlider.setBounds (0, 0, 0, 0);
+        outputSlider.setBounds (0, 0, 0, 0);
+        mixSlider.setBounds (0, 0, 0, 0);
+
+        inputSlider.setVisible (false);
+        outputSlider.setVisible (false);
+        mixSlider.setVisible (false);
+    }
 
     const int buttonAreaX = horizontalLayout.leftX;
     const int buttonAreaW = horizontalLayout.contentW;

@@ -90,6 +90,13 @@ private:
                 return juce::String (rounded3, 3);
             }
 
+            // For input/output gain (dB)
+            if (owner != nullptr && (this == &owner->inputSlider || this == &owner->outputSlider))
+            {
+                const double rounded1 = std::round (v * 10.0) / 10.0;
+                return juce::String (rounded1, 1);
+            }
+
             juce::String t = juce::Slider::getTextFromValue (v);
             int dot = t.indexOfChar ('.');
             if (dot >= 0)
@@ -109,6 +116,8 @@ private:
     BarSlider styleSlider;
     BarSlider feedbackSlider;
     BarSlider modSlider;
+    BarSlider inputSlider;
+    BarSlider outputSlider;
     BarSlider mixSlider;
 
     juce::ToggleButton invButton;
@@ -125,6 +134,8 @@ private:
     std::unique_ptr<SliderAttachment> styleAttachment;
     std::unique_ptr<SliderAttachment> feedbackAttachment;
     std::unique_ptr<SliderAttachment> modAttachment;
+    std::unique_ptr<SliderAttachment> inputAttachment;
+    std::unique_ptr<SliderAttachment> outputAttachment;
     std::unique_ptr<SliderAttachment> mixAttachment;
 
     std::unique_ptr<ButtonAttachment> invAttachment;
@@ -161,10 +172,12 @@ private:
         int barH = 0;
         int gapY = 0;
         int topY = 0;
+        int toggleBarH = 0;
+        int toggleBarY = 0;
     };
 
     static HorizontalLayoutMetrics buildHorizontalLayout (int editorW, int valueColW);
-    static VerticalLayoutMetrics buildVerticalLayout (int editorH, int biasY);
+    static VerticalLayoutMetrics buildVerticalLayout (int editorH, int biasY, bool ioExpanded);
     void updateCachedLayout();
 
     class MinimalLNF : public juce::LookAndFeel_V4
@@ -259,6 +272,13 @@ private:
 
     juce::String getMixText() const;
     juce::String getMixTextShort() const;
+
+    juce::String getInputText() const;
+    juce::String getInputTextShort() const;
+
+    juce::String getOutputText() const;
+    juce::String getOutputTextShort() const;
+
     int getTargetValueColumnWidth() const;
 
     void sliderValueChanged (juce::Slider* slider) override;
@@ -306,12 +326,18 @@ private:
     juce::String cachedMixTextFull;
     juce::String cachedMixTextShort;
     juce::String cachedMixIntOnly;
+    juce::String cachedInputTextFull;
+    juce::String cachedInputTextShort;
+    juce::String cachedInputIntOnly;
+    juce::String cachedOutputTextFull;
+    juce::String cachedOutputTextShort;
+    juce::String cachedOutputIntOnly;
     mutable std::uint64_t cachedValueColumnWidthKey = 0;
     mutable int cachedValueColumnWidth = 90;
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
-    std::array<juce::Rectangle<int>, 8> cachedValueAreas_;
+    std::array<juce::Rectangle<int>, 10> cachedValueAreas_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
@@ -321,6 +347,8 @@ private:
     static constexpr double kDefaultMod      = (double) DisperserAudioProcessor::kModDefault;
     static constexpr double kDefaultMix      = (double) DisperserAudioProcessor::kMixDefault;
     static constexpr double kDefaultStyle    = (double) DisperserAudioProcessor::kStyleDefault;
+    static constexpr double kDefaultInput    = (double) DisperserAudioProcessor::kInputDefault;
+    static constexpr double kDefaultOutput   = (double) DisperserAudioProcessor::kOutputDefault;
 
     static constexpr int kMinW = 360;
     static constexpr int kMinH = 540;
@@ -343,6 +371,10 @@ private:
     // CRT post-process effect
     CrtEffect crtEffect;
     float     crtTime = 0.0f;
+
+    // IO collapsible section state
+    juce::Rectangle<int> cachedToggleBarArea_;
+    bool ioSectionExpanded_ = false;
 
     std::array<juce::Colour, 2> defaultPalette {
         juce::Colours::white,

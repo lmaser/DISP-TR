@@ -30,6 +30,14 @@ namespace
 		}
 	}
 
+	// Gain / mix EMA coefficient: one-pole ~5 ms time constant at 44.1 kHz.
+	constexpr float kGainSmoothCoeff = 0.9955f;
+
+	inline float fastDecibelsToGain (float dB) noexcept
+	{
+		if (dB <= -100.0f) return 0.0f;
+		return std::pow (10.0f, dB * 0.05f);
+	}
 }
 
 DisperserAudioProcessor::DisperserAudioProcessor()
@@ -65,6 +73,8 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	uiColorParams[1] = apvts.getRawParameterValue (kParamUiColor1);
 	uiColorParams[2] = apvts.getRawParameterValue (kParamUiColor2);
 	uiColorParams[3] = apvts.getRawParameterValue (kParamUiColor3);
+	inputParam = apvts.getRawParameterValue (kParamInput);
+	outputParam = apvts.getRawParameterValue (kParamOutput);
 }
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
@@ -138,6 +148,11 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	feedbackSmoothed.setCurrentAndTargetValue (juce::jlimit (0.0f, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault)));
 	feedbackLastL = 0.0f;
 	feedbackLastR = 0.0f;
+
+	// Input/Output/Mix gain smoothing init (same as ECHO-TR)
+	smoothedInputGain = 1.0f;
+	smoothedOutputGain = 1.0f;
+	smoothedMix = 1.0f;
 
 	lastCoeffFreq = -1.0f;
 	lastCoeffShape = -1.0f;
@@ -342,6 +357,12 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	// ── MIX (dry/wet) ───────────────────────────────────────
 	const float mixValue = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (mixParam, kMixDefault));
+
+	// ── INPUT / OUTPUT gain (dB → linear, same as ECHO-TR) ───
+	const float inputGainDb  = juce::jlimit (kInputMin,  kInputMax,  loadAtomicOrDefault (inputParam,  kInputDefault));
+	const float outputGainDb = juce::jlimit (kOutputMin, kOutputMax, loadAtomicOrDefault (outputParam, kOutputDefault));
+	const float inputGain    = fastDecibelsToGain (inputGainDb);
+	const float outputGain   = fastDecibelsToGain (outputGainDb);
 
 	// ── STYLE: 0 = MONO, 1 = STEREO ────────────────────────
 	const int style = juce::jlimit (kStyleMin, kStyleMax, loadIntParamOrDefault (styleParam, (int) kStyleDefault));
@@ -609,7 +630,21 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	if (invEnabled)
 		buffer.applyGain (-1.0f);
 
-	// ── Dry/Wet blend ───────────────────────────────────────
+	// ── Per-sample smoothed Input/Output/Mix gain ──
+	for (int n = 0; n < numSamples; ++n)
+	{
+		smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
+		smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
+		smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
+	}
+	{
+		constexpr float kSnapEpsilon = 1e-5f;
+		if (std::abs (smoothedInputGain  - inputGain)  < kSnapEpsilon) smoothedInputGain  = inputGain;
+		if (std::abs (smoothedOutputGain - outputGain) < kSnapEpsilon) smoothedOutputGain = outputGain;
+		if (std::abs (smoothedMix        - mixValue)   < kSnapEpsilon) smoothedMix        = mixValue;
+	}
+
+	// ── Dry/Wet blend — gains only on wet (same as ECHO-TR) ──
 	if (needsDryBlend)
 	{
 		for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
@@ -617,7 +652,21 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			const float* dry = dryBuffer.getReadPointer (ch);
 			float* wet = buffer.getWritePointer (ch);
 			for (int n = 0; n < numSamples; ++n)
-				wet[n] = dry[n] + mixValue * (wet[n] - dry[n]);
+			{
+				const float dryS = dry[n];
+				const float wetS = wet[n] * smoothedInputGain * smoothedOutputGain;
+				wet[n] = dryS + smoothedMix * (wetS - dryS);
+			}
+		}
+	}
+	else
+	{
+		// Full wet — apply input * output gain
+		for (int ch = 0; ch < numChannels; ++ch)
+		{
+			float* data = buffer.getWritePointer (ch);
+			for (int n = 0; n < numSamples; ++n)
+				data[n] = data[n] * smoothedInputGain * smoothedOutputGain;
 		}
 	}
 
@@ -662,6 +711,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamMix, "Mix",
 		juce::NormalisableRange<float> (0.0f, kMixMax, 0.0f, 1.0f), kMixDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamInput, "Input",
+		juce::NormalisableRange<float> (kInputMin, kInputMax, 0.0f, 2.5f), kInputDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamOutput, "Output",
+		juce::NormalisableRange<float> (kOutputMin, kOutputMax, 0.0f, 3.23f), kOutputDefault));
 
 		// Style: 0 = Mono, 1 = Stereo
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
@@ -840,6 +897,18 @@ void DisperserAudioProcessor::getCurrentProgramStateInformation (juce::MemoryBlo
 void DisperserAudioProcessor::setCurrentProgramStateInformation (const void* data, int sizeInBytes)
 {
 	setStateInformation (data, sizeInBytes);
+}
+
+void DisperserAudioProcessor::setUiIoExpanded (bool expanded)
+{
+	apvts.state.setProperty (UiStateKeys::ioExpanded, expanded, nullptr);
+}
+
+bool DisperserAudioProcessor::getUiIoExpanded() const noexcept
+{
+	const auto fromState = apvts.state.getProperty (UiStateKeys::ioExpanded);
+	if (! fromState.isVoid()) return (bool) fromState;
+	return false;
 }
 
 void DisperserAudioProcessor::setMidiChannel (int channel)
