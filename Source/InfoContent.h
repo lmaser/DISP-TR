@@ -34,9 +34,9 @@ namespace InfoContent
     <separator>&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;</separator>
     <spacer/>
     <poem>"The rays of light differ</poem>
-    <poem>in their degrees of refrangibility.</poem>
-    <poem>And hence arises</poem>
-    <poem>the different colours.</poem>
+    <poem>in their degrees of refrangibility,</poem>
+    <poem>and hence arises</poem>
+    <poem>the different colours."</poem>
     <spacer/>
     <text>&#x2014; Isaac Newton</text>
   </content>
