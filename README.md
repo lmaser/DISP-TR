@@ -1,4 +1,4 @@
-# DISP-TR v1.0c
+# DISP-TR v1.1
 
 <br/><br/>
 
@@ -19,6 +19,7 @@ DISP-TR uses a text-based UI with horizontal bar sliders. All controls are visib
 
 - **Bar sliders**: Click and drag horizontally. Right-click for numeric entry.
 - **Toggle buttons**: INV (invert), MD (MIDI). Click to enable/disable.
+- **Collapsible INPUT/OUTPUT/MIX section**: Click the toggle bar (triangle) at the top of the slider area to expand or collapse the INPUT, OUTPUT and MIX controls. The expanded/collapsed state persists across sessions and preset changes.
 - **Gear icon** (top-right): Opens the info popup with version, credits, and a link to Graphics settings.
 - **Graphics popup**: Toggle CRT post-processing effect and switch between default/custom colour palettes.
 - **Resize**: Drag the bottom-right corner. Size persists across sessions.
@@ -84,6 +85,15 @@ Controls the stereo processing mode:
 Dry/wet blend. At 100% the output is fully processed (wet). At 0% the signal passes through unaffected (dry).  
 Default is 100%.
 
+### INPUT (−100 to 0 dB)
+
+Pre-processing gain. Controls how much signal enters the all-pass chain.  
+Applied to the wet signal only — the dry signal is unaffected.
+
+### OUTPUT (−100 to +24 dB)
+
+Post-processing gain. Applied to the wet signal only.
+
 ### INV (Invert)
 
 Inverts output polarity (multiplies signal by −1).
@@ -109,4 +119,4 @@ Channel can be configured via right-click on the MIDI channel display (0 = omni,
 
 ### State Persistence
 - All parameters saved via JUCE AudioProcessorValueTreeState.
-- UI state (window size, palette, CRT toggle, custom colours, MIDI channel) persisted separately in the processor's state block.
+- UI state (window size, palette, CRT toggle, custom colours, MIDI channel, IO section expanded/collapsed) persisted separately in the processor's state block.
