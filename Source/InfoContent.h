@@ -36,7 +36,7 @@ namespace InfoContent
     <poem>"The rays of light differ</poem>
     <poem>in their degrees of refrangibility.</poem>
     <poem>And hence arises</poem>
-    <poem>the dispersion of colors.</poem>
+    <poem>the different colours.</poem>
     <spacer/>
     <text>&#x2014; Isaac Newton</text>
   </content>
