@@ -193,6 +193,9 @@ private:
 	float smoothedOutputGain = 1.0f;
 	float smoothedMix = 1.0f;
 
+	// Pre-allocated dry buffer for mix blend (avoids malloc in processBlock)
+	juce::AudioBuffer<float> dryBuffer;
+
 	std::atomic<float>* inputParam = nullptr;
 	std::atomic<float>* outputParam = nullptr;
 	std::atomic<float>* amountParam = nullptr;

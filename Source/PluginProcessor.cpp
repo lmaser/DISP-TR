@@ -154,6 +154,9 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	smoothedOutputGain = 1.0f;
 	smoothedMix = 1.0f;
 
+	// Pre-allocate dry buffer (avoids malloc in processBlock)
+	dryBuffer.setSize (getTotalNumOutputChannels(), samplesPerBlock);
+
 	lastCoeffFreq = -1.0f;
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
@@ -368,11 +371,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const int style = juce::jlimit (kStyleMin, kStyleMax, loadIntParamOrDefault (styleParam, (int) kStyleDefault));
 
 	// Save dry input for dry/wet blend (only when mix < 1)
-	juce::AudioBuffer<float> dryBuffer;
 	const bool needsDryBlend = (mixValue < 0.999f);
 	if (needsDryBlend)
 	{
-		dryBuffer.makeCopyOf (buffer);
+		if (dryBuffer.getNumChannels() < numChannels || dryBuffer.getNumSamples() < numSamples)
+			dryBuffer.setSize (numChannels, numSamples, false, false, true);
+		for (int ch = 0; ch < numChannels; ++ch)
+			dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 	}
 
 	// ── MIDI glide: velocity-dependent EMA coefficient ──────
@@ -630,21 +635,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	if (invEnabled)
 		buffer.applyGain (-1.0f);
 
-	// ── Per-sample smoothed Input/Output/Mix gain ──
-	for (int n = 0; n < numSamples; ++n)
-	{
-		smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
-		smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
-		smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
-	}
-	{
-		constexpr float kSnapEpsilon = 1e-5f;
-		if (std::abs (smoothedInputGain  - inputGain)  < kSnapEpsilon) smoothedInputGain  = inputGain;
-		if (std::abs (smoothedOutputGain - outputGain) < kSnapEpsilon) smoothedOutputGain = outputGain;
-		if (std::abs (smoothedMix        - mixValue)   < kSnapEpsilon) smoothedMix        = mixValue;
-	}
-
-	// ── Dry/Wet blend — gains only on wet (same as ECHO-TR) ──
+	// ── Per-sample smoothed Input/Output/Mix + Dry/Wet blend (fused loop) ──
 	if (needsDryBlend)
 	{
 		for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
@@ -653,6 +644,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			float* wet = buffer.getWritePointer (ch);
 			for (int n = 0; n < numSamples; ++n)
 			{
+				smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
+				smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
+				smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
+
 				const float dryS = dry[n];
 				const float wetS = wet[n] * smoothedInputGain * smoothedOutputGain;
 				wet[n] = dryS + smoothedMix * (wetS - dryS);
@@ -666,8 +661,18 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		{
 			float* data = buffer.getWritePointer (ch);
 			for (int n = 0; n < numSamples; ++n)
+			{
+				smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
+				smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
 				data[n] = data[n] * smoothedInputGain * smoothedOutputGain;
+			}
 		}
+	}
+	{
+		constexpr float kSnapEpsilon = 1e-5f;
+		if (std::abs (smoothedInputGain  - inputGain)  < kSnapEpsilon) smoothedInputGain  = inputGain;
+		if (std::abs (smoothedOutputGain - outputGain) < kSnapEpsilon) smoothedOutputGain = outputGain;
+		if (std::abs (smoothedMix        - mixValue)   < kSnapEpsilon) smoothedMix        = mixValue;
 	}
 
 	DSP_LOG_BLOCK_END(dspLog, numSamples, currentSampleRate,
