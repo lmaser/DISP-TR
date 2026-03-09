@@ -345,7 +345,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     seriesSlider.setNumDecimalPlacesToDisplay (0);
     freqSlider.setNumDecimalPlacesToDisplay (3);
     shapeSlider.setNumDecimalPlacesToDisplay (2);
-    feedbackSlider.setNumDecimalPlacesToDisplay (2);
+    feedbackSlider.setNumDecimalPlacesToDisplay (1);
     modSlider.setNumDecimalPlacesToDisplay (2);
     styleSlider.setNumDecimalPlacesToDisplay (0);
     inputSlider.setNumDecimalPlacesToDisplay (1);
@@ -1286,7 +1286,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     else if (&s == &shapeSlider)
         currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 4);
     else if (&s == &feedbackSlider)
-        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 4);
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 2);
     else if (&s == &mixSlider)
         currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 4);
     else if (&s == &modSlider)
@@ -1328,7 +1328,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         else if (&s == &seriesSlider)  worstCaseText = "4";
         else if (&s == &freqSlider)    worstCaseText = "20000.000";
         else if (&s == &shapeSlider)   worstCaseText = "100.0000";
-        else if (&s == &feedbackSlider)worstCaseText = "100.0000";
+        else if (&s == &feedbackSlider)worstCaseText = "100.00";
         else if (&s == &mixSlider)     worstCaseText = "100.0000";
         else if (&s == &modSlider)     worstCaseText = "4.00";
         else if (&s == &inputSlider)   worstCaseText = "-100.0";
@@ -1435,8 +1435,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         {
             minVal = 0.0;
             maxVal = 100.0;
-            maxDecs = 4;
-            maxLen = 8;
+            maxDecs = 2;
+            maxLen = 6;
         }
         else if (&s == &mixSlider)
         {
@@ -2469,7 +2469,7 @@ namespace
 
     constexpr const char* kFeedbackLegendFull  = "100% FEEDBACK";
     constexpr const char* kFeedbackLegendShort = "100% FBK";
-    constexpr const char* kFeedbackLegendInt   = "100";
+    constexpr const char* kFeedbackLegendInt   = "100%";
 
     constexpr const char* kModLegendFull  = "X4.00 MOD";
     constexpr const char* kModLegendShort = "X4.00";
