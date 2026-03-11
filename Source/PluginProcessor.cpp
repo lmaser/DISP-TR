@@ -343,10 +343,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	if (midiEnabled && midiFreq > 0.0f)
 		targetFreq = midiFreq;
 
-	// ── MOD frequency multiplier ─────────────────────────────
+	// ── MOD frequency multiplier (hyperbolic below centre, linear above) ──
 	const float modValue = loadAtomicOrDefault (modParam, kModDefault);
 	const float freqMultiplier = (modValue < 0.5f)
-		? (0.25f + modValue * 1.5f)
+		? 1.0f / (4.0f - 6.0f * modValue)
 		: (1.0f + (modValue - 0.5f) * 6.0f);
 	targetFreq *= freqMultiplier;
 

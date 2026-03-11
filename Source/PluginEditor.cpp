@@ -606,6 +606,16 @@ void DisperserAudioProcessorEditor::timerCallback()
     if (suppressSizePersistence)
         return;
 
+    // ── MIDI note name polling ──
+    const auto newMidiDisplay = audioProcessor.getCurrentFreqDisplay();
+    if (newMidiDisplay != cachedMidiDisplay)
+    {
+        cachedMidiDisplay = newMidiDisplay;
+        if (refreshLegendTextCache())
+            updateCachedLayout();
+        repaint (getRowRepaintBounds (freqSlider));
+    }
+
     const int w = getWidth();
     const int h = getHeight();
 
@@ -634,16 +644,6 @@ void DisperserAudioProcessorEditor::timerCallback()
                                     || mixSlider.isMouseButtonDown();
         if (! anySliderDragging)
             repaint();
-    }
-
-    // ── MIDI note name polling ──
-    const auto newMidiDisplay = audioProcessor.getCurrentFreqDisplay();
-    if (newMidiDisplay != cachedMidiDisplay)
-    {
-        cachedMidiDisplay = newMidiDisplay;
-        if (refreshLegendTextCache())
-            updateCachedLayout();
-        repaint (getRowRepaintBounds (freqSlider));
     }
 }
 
