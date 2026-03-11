@@ -360,7 +360,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
                            1.0);
-    styleSlider.setRange (0, 1, 1);
+    styleSlider.setRange (0, 3, 1);
     styleSlider.setAllowNumericPopup (false);
 
     invButton.setButtonText ("");
@@ -2351,6 +2351,8 @@ juce::String DisperserAudioProcessorEditor::getStyleText() const
 {
     const int style = (int) styleSlider.getValue();
     if (style == 0) return "MONO STYLE";
+    if (style == 2) return "WIDE STYLE";
+    if (style == 3) return "DUAL STYLE";
     return "STEREO STYLE";
 }
 
@@ -2358,6 +2360,8 @@ juce::String DisperserAudioProcessorEditor::getStyleTextShort() const
 {
     const int style = (int) styleSlider.getValue();
     if (style == 0) return "MONO";
+    if (style == 2) return "WIDE";
+    if (style == 3) return "DUAL";
     return "STEREO";
 }
 

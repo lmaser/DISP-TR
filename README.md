@@ -1,4 +1,4 @@
-# DISP-TR v1.1
+# DISP-TR v1.2
 
 <br/><br/>
 
@@ -32,7 +32,7 @@ The value column to the right of each slider shows the current state in context:
 - STAGES shows the number of active all-pass stages.
 - SERIES shows the number of cascaded chains.
 - SHAPE shows the distribution percentage.
-- STYLE shows the stereo mode (MONO or STEREO).
+- STYLE shows the stereo mode (MONO, STEREO, WIDE, or DUAL).
 - MIX shows dry/wet percentage.
 
 ## Parameters
@@ -75,11 +75,13 @@ Controls how spread or warped the per-stage frequency distribution is around FRE
 At 0% all stages share the same coefficient. Higher values fan the stages out across the spectrum.  
 Smoothed linearly (50 ms time constant).
 
-### STYLE (MONO / STEREO)
+### STYLE (MONO / STEREO / WIDE / DUAL)
 
 Controls the stereo processing mode:
 - **MONO**: Only the left channel is processed; the result is copied to the right channel.
 - **STEREO** (default): Both channels are processed independently with identical coefficients.
+- **WIDE**: Complementary dispersion — R channel uses negated allpass coefficients (−a), giving an opposite group-delay profile while remaining allpass (flat magnitude, stable). Cross-feedback between channels creates a dimension-expansion effect.
+- **DUAL**: R channel processes at half the center frequency (×0.5) with its own coefficient set. Independent feedback per channel — no cross-feed. Produces two distinct dispersion characters, one per side.
 
 ### MIX (0–100%)
 

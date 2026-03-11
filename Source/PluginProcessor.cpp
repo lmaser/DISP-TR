@@ -175,6 +175,7 @@ void DisperserAudioProcessor::releaseResources()
 	for (auto& c : xfadeChainL) c.clear();
 	for (auto& c : xfadeChainR) c.clear();
 	stageCoeff.clear();
+	stageCoeffR.clear();
 }
 
 #if ! JucePlugin_PreferredChannelConfigurations
@@ -205,6 +206,8 @@ void DisperserAudioProcessor::resizeDspState (int stages, int series)
 	const size_t coeffSize = (size_t) nStages;
 	if (stageCoeff.size() != coeffSize)
 		stageCoeff.assign (coeffSize, 0.0f);
+	if (stageCoeffR.size() != coeffSize)
+		stageCoeffR.assign (coeffSize, 0.0f);
 
 	for (int i = 0; i < kSeriesMax; ++i)
 	{
@@ -239,11 +242,11 @@ void DisperserAudioProcessor::clearStageRange (int fromStageInclusive,
 	}
 }
 
-void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm, int stages)
+void DisperserAudioProcessor::updateCoefficientsInto (float freqHz, float shapeNorm, int stages, std::vector<float>& dest)
 {
 	const int nStages = juce::jmax (1, stages);
-	if ((int) stageCoeff.size() < nStages)
-		stageCoeff.assign ((size_t) kAmountMax, 0.0f);
+	if ((int) dest.size() < nStages)
+		dest.assign ((size_t) kAmountMax, 0.0f);
 
 	const float sr = (float) currentSampleRate;
 	const float minFreq = 20.0f;
@@ -263,7 +266,7 @@ void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm,
 
 	if (nStages == 1)
 	{
-		stageCoeff[0] = calcAllPassCoeff (center, sr);
+		dest[0] = calcAllPassCoeff (center, sr);
 		return;
 	}
 
@@ -275,8 +278,13 @@ void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm,
 		const float warped = std::copysign (absWarped, u);
 		const float oct = 0.5f * spreadOct * warped;
 		const float f = juce::jlimit (minFreq, maxFreq, center * std::pow (2.0f, oct));
-		stageCoeff[(size_t) i] = calcAllPassCoeff (f, sr);
+		dest[(size_t) i] = calcAllPassCoeff (f, sr);
 	}
+}
+
+void DisperserAudioProcessor::updateCoefficients (float freqHz, float shapeNorm, int stages)
+{
+	updateCoefficientsInto (freqHz, shapeNorm, stages, stageCoeff);
 }
 
 void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -367,7 +375,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const float inputGain    = fastDecibelsToGain (inputGainDb);
 	const float outputGain   = fastDecibelsToGain (outputGainDb);
 
-	// ── STYLE: 0 = MONO, 1 = STEREO ────────────────────────
+	// ── STYLE: 0=MONO, 1=STEREO, 2=WIDE, 3=DUAL ────────────
 	const int style = juce::jlimit (kStyleMin, kStyleMax, loadIntParamOrDefault (styleParam, (int) kStyleDefault));
 
 	// Save dry input for dry/wet blend (only when mix < 1)
@@ -417,6 +425,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	auto* ch0 = buffer.getWritePointer (0);
 	float* ch1 = (numChannels > 1) ? buffer.getWritePointer (1) : nullptr;
 	const bool hasStereo = (ch1 != nullptr);
+	const bool processR     = (style >= 1 && hasStereo);
+	const bool crossFbk     = (style == 2);  // WIDE
+	const bool negateCoeffR = (style == 2);  // WIDE: complementary phase
+	const bool dualCoeffR   = (style == 3);  // DUAL: separate R coefficients
 	const bool crossfading = (seriesXfadeSamplesRemaining > 0);
 
 	const bool freqConverged = std::abs (smoothedFreqValue - targetFreq) < 0.01f;
@@ -432,12 +444,25 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		smoothedFreqValue = targetFreq;   // snap EMA to avoid drift
 		const int stgs = activeStages;
 		const float fb = feedbackSmoothed.getCurrentValue();
+
+		// DUAL: update R coefficients for fast path
+		if (dualCoeffR && stgs > 0)
+		{
+			const float freqR = targetFreq * 0.5f;
+			if (std::abs (freqR - lastCoeffFreqR) > 0.001f || lastCoeffStages != stgs)
+			{
+				updateCoefficientsInto (freqR, targetShape, stgs, stageCoeffR);
+				lastCoeffFreqR = freqR;
+			}
+		}
+
 		if (stgs > 0)
 		{
 			for (int n = 0; n < numSamples; ++n)
 			{
-				float xL = ch0[n] + fb * feedbackLastL;
-				float xR = (hasStereo && style >= 1) ? (ch1[n] + fb * feedbackLastR) : xL;
+				// Feedback routing: cross for WIDE, independent otherwise
+				float xL = ch0[n] + fb * (crossFbk ? feedbackLastR : feedbackLastL);
+				float xR = processR ? (ch1[n] + fb * (crossFbk ? feedbackLastL : feedbackLastR)) : xL;
 
 				for (int s = 0; s < activeSeries; ++s)
 				{
@@ -453,11 +478,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = xL + (a * yL);
 						xL = yL;
 
-						if (hasStereo && style >= 1)
+						if (processR)
 						{
+							// WIDE: -a (complementary phase), DUAL: separate coeffs, STEREO: same a
+							const float aR = negateCoeffR ? -a : (dualCoeffR ? stageCoeffR[(size_t) st] : a);
 							auto& sr = rS[st];
-							const float yR = (-a * xR) + sr.z1;
-							sr.z1 = xR + (a * yR);
+							const float yR = (-aR * xR) + sr.z1;
+							sr.z1 = xR + (aR * yR);
 							xR = yR;
 						}
 					}
@@ -467,8 +494,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				feedbackLastL = xL;
 				if (hasStereo)
 				{
-					ch1[n] = (style >= 1) ? xR : xL;
-					feedbackLastR = (style >= 1) ? xR : xL;
+					ch1[n] = processR ? xR : xL;
+					feedbackLastR = processR ? xR : xL;
 				}
 			}
 		}
@@ -512,8 +539,19 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				}
 			}
 
-			const float inputL = ch0[n] + fb * feedbackLastL;
-			const float inputR = (hasStereo && style >= 1) ? (ch1[n] + fb * feedbackLastR) : inputL;
+			// DUAL: update R coefficients in slow path
+			if (dualCoeffR)
+			{
+				const float freqR = smoothedFreq * 0.5f;
+				if (std::abs (freqR - lastCoeffFreqR) > 0.001f || lastCoeffStages != coeffStages)
+				{
+					updateCoefficientsInto (freqR, smoothedShape, coeffStages, stageCoeffR);
+					lastCoeffFreqR = freqR;
+				}
+			}
+
+			const float inputL = ch0[n] + fb * (crossFbk ? feedbackLastR : feedbackLastL);
+			const float inputR = processR ? (ch1[n] + fb * (crossFbk ? feedbackLastL : feedbackLastR)) : inputL;
 
 			// Process through current (new) topology
 			float xL = inputL;
@@ -533,11 +571,12 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					sl.z1 = xL + (a * yL);
 					xL = yL;
 
-					if (hasStereo && style >= 1)
+					if (processR)
 					{
+						const float aR = negateCoeffR ? -a : (dualCoeffR ? stageCoeffR[(size_t) st] : a);
 						auto& sr = rStages[st];
-						const float yR = (-a * xR) + sr.z1;
-						sr.z1 = xR + (a * yR);
+						const float yR = (-aR * xR) + sr.z1;
+						sr.z1 = xR + (aR * yR);
 						xR = yR;
 					}
 				}
@@ -553,12 +592,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					sl.z1 = inL + (a * yL);
 					xL = inL + (stageFrac * (yL - inL));
 
-					if (hasStereo && style >= 1)
+					if (processR)
 					{
+						const float aR = negateCoeffR ? -a : (dualCoeffR ? stageCoeffR[(size_t) st] : a);
 						const float inR = xR;
 						auto& sr = rStages[st];
-						const float yR = (-a * inR) + sr.z1;
-						sr.z1 = inR + (a * yR);
+						const float yR = (-aR * inR) + sr.z1;
+						sr.z1 = inR + (aR * yR);
 						xR = inR + (stageFrac * (yR - inR));
 					}
 				}
@@ -584,11 +624,12 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = xfL + (a * yL);
 						xfL = yL;
 
-						if (hasStereo && style >= 1)
+						if (processR)
 						{
+							const float aR = negateCoeffR ? -a : (dualCoeffR ? stageCoeffR[(size_t) st] : a);
 							auto& sr = rStages[st];
-							const float yR = (-a * xfR) + sr.z1;
-							sr.z1 = xfR + (a * yR);
+							const float yR = (-aR * xfR) + sr.z1;
+							sr.z1 = xfR + (aR * yR);
 							xfR = yR;
 						}
 					}
@@ -604,12 +645,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						sl.z1 = inL + (a * yL);
 						xfL = inL + (stageFrac * (yL - inL));
 
-						if (hasStereo && style >= 1)
+						if (processR)
 						{
+							const float aR = negateCoeffR ? -a : (dualCoeffR ? stageCoeffR[(size_t) st] : a);
 							const float inR = xfR;
 							auto& sr = rStages[st];
-							const float yR = (-a * inR) + sr.z1;
-							sr.z1 = inR + (a * yR);
+							const float yR = (-aR * inR) + sr.z1;
+							sr.z1 = inR + (aR * yR);
 							xfR = inR + (stageFrac * (yR - inR));
 						}
 					}
@@ -625,8 +667,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			feedbackLastL = xL;
 			if (hasStereo)
 			{
-				ch1[n] = (style >= 1) ? xR : xL;
-				feedbackLastR = (style >= 1) ? xR : xL;
+				ch1[n] = processR ? xR : xL;
+				feedbackLastR = processR ? xR : xL;
 			}
 		}
 	}
@@ -725,7 +767,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 		kParamOutput, "Output",
 		juce::NormalisableRange<float> (kOutputMin, kOutputMax, 0.0f, 3.23f), kOutputDefault));
 
-		// Style: 0 = Mono, 1 = Stereo
+		// Style: 0 = Mono, 1 = Stereo, 2 = Wide, 3 = Dual
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamStyle, "Style",
 		juce::NormalisableRange<float> ((float) kStyleMin, (float) kStyleMax, 1.0f, 1.0f), kStyleDefault));

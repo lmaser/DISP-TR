@@ -65,7 +65,7 @@ public:
 	static constexpr float kMixDefault = 1.0f;
 
 	static constexpr int kStyleMin     = 0;
-	static constexpr int kStyleMax     = 1;         // 0 = MONO, 1 = STEREO
+	static constexpr int kStyleMax     = 3;         // 0 = MONO, 1 = STEREO, 2 = WIDE, 3 = DUAL
 	static constexpr float kStyleDefault = 1.0f;    // STEREO by default
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -145,11 +145,13 @@ private:
 	static float calcAllPassCoeff (float frequency, float sampleRate) noexcept;
 	void resizeDspState (int stages, int series);
 	void updateCoefficients (float freqHz, float shapeNorm, int stages);
+	void updateCoefficientsInto (float freqHz, float shapeNorm, int stages, std::vector<float>& dest);
 	void clearStageRange (int fromStageInclusive, int toStageExclusive, int seriesCount) noexcept;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> chainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> chainR;
 	std::vector<float> stageCoeff;
+	std::vector<float> stageCoeffR;   // R-channel coefficients for DUAL mode
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> stagesSmoothed;
 	float smoothedFreqValue = 1000.0f;
 	float freqEmaCoeff = 0.0f;
@@ -166,6 +168,7 @@ private:
 	float lastCoeffFreq = -1.0f;
 	float lastCoeffShape = -1.0f;
 	int lastCoeffStages = -1;
+	float lastCoeffFreqR  = -1.0f;
 	int coeffUpdateCountdown = 0;
 
 	// ── Feedback ──
