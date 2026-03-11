@@ -2532,16 +2532,13 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
     m.btnY = editorH - m.bottomMargin - m.box;
     m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
 
-    // Expanded: 10 bars + 11 gaps (9 inter-slider + 2 toggle padding).
-    // Collapsed: 7 bars + 7 gaps (6 inter-slider + 1 toggle-to-slider).
-    //            The toggle bar (20px fixed) is subtracted from available space
-    //            BEFORE scaling so bars/gaps don't overflow.
-    const int numSliders = ioExpanded ? 10 : 7;
-    const int numGaps    = ioExpanded ? 11 : 7;
+    // Bars below toggle: 3 IO bars when expanded, 7 main bars when collapsed.
+    // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
+    const int numSliders = ioExpanded ? 3 : 7;
+    const int numGaps    = ioExpanded ? 3 : 7;  // (N-1) inter-slider + 1 toggle-to-first
 
     m.toggleBarH = 20;  // fixed visual height for click area
-    const int spaceForScale = ioExpanded ? m.availableForSliders
-                                         : juce::jmax (40, m.availableForSliders - m.toggleBarH);
+    const int spaceForScale = juce::jmax (40, m.availableForSliders - m.toggleBarH);
 
     const int nominalStack = numSliders * nominalBarH + numGaps * nominalGapY;
     const double stackScale = nominalStack > 0 ? juce::jmin (1.0, (double) spaceForScale / (double) nominalStack)
@@ -2560,10 +2557,7 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
 
     m.topY = m.topMargin;
 
-    if (ioExpanded)
-        m.toggleBarY = m.topY + 3 * m.barH + 3 * m.gapY;
-    else
-        m.toggleBarY = m.topY;  // collapsed: toggle bar flush with content top
+    m.toggleBarY = m.topY;  // toggle bar always at top
 
     return m;
 }
@@ -3156,41 +3150,55 @@ void DisperserAudioProcessorEditor::resized()
     const auto horizontalLayout = buildHorizontalLayout (W, getTargetValueColumnWidth());
     const auto verticalLayout = buildVerticalLayout (H, kLayoutVerticalBiasPx, ioSectionExpanded_);
 
-    // Position sliders based on IO section expanded/collapsed state
+    // Position sliders — toggle bar always at top, swaps between main and IO bars
+    const int mainTop = verticalLayout.toggleBarY + verticalLayout.toggleBarH + verticalLayout.gapY;
+    const int step = verticalLayout.barH + verticalLayout.gapY;
+
     if (ioSectionExpanded_)
     {
-        // Expanded: INPUT, OUTPUT, MIX → [toggle bar] → FREQ, MOD, FEEDBACK, STAGES, SERIES, SHAPE, STYLE
-        int y = verticalLayout.topY;
-        inputSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        outputSlider.setBounds (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        mixSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH;
-        // padding + toggle bar + padding
-        y += verticalLayout.gapY;  // padding above
-        y += verticalLayout.gapY;  // toggle bar
-        y += verticalLayout.gapY;  // padding below
-        freqSlider.setBounds      (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        modSlider.setBounds       (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        feedbackSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        amountSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        seriesSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        shapeSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        styleSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);
+        // Expanded: [toggle bar] → INPUT, OUTPUT, MIX; main params hidden
+        inputSlider.setBounds  (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
+        outputSlider.setBounds (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
+        mixSlider.setBounds    (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);
 
         inputSlider.setVisible (true);
         outputSlider.setVisible (true);
         mixSlider.setVisible (true);
+
+        freqSlider.setBounds (0, 0, 0, 0);
+        modSlider.setBounds (0, 0, 0, 0);
+        feedbackSlider.setBounds (0, 0, 0, 0);
+        amountSlider.setBounds (0, 0, 0, 0);
+        seriesSlider.setBounds (0, 0, 0, 0);
+        shapeSlider.setBounds (0, 0, 0, 0);
+        styleSlider.setBounds (0, 0, 0, 0);
+
+        freqSlider.setVisible (false);
+        modSlider.setVisible (false);
+        feedbackSlider.setVisible (false);
+        amountSlider.setVisible (false);
+        seriesSlider.setVisible (false);
+        shapeSlider.setVisible (false);
+        styleSlider.setVisible (false);
     }
     else
     {
-        // Collapsed: sliders start after toggle bar + gap
-        int y = verticalLayout.toggleBarY + verticalLayout.toggleBarH + verticalLayout.gapY;
-        freqSlider.setBounds      (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        modSlider.setBounds       (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        feedbackSlider.setBounds  (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        amountSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        seriesSlider.setBounds    (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        shapeSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);  y += verticalLayout.barH + verticalLayout.gapY;
-        styleSlider.setBounds     (horizontalLayout.leftX, y, horizontalLayout.barW, verticalLayout.barH);
+        // Collapsed: [toggle bar] → main params; IO hidden
+        freqSlider.setBounds      (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
+        modSlider.setBounds       (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
+        feedbackSlider.setBounds  (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);
+        amountSlider.setBounds    (horizontalLayout.leftX, mainTop + 3 * step, horizontalLayout.barW, verticalLayout.barH);
+        seriesSlider.setBounds    (horizontalLayout.leftX, mainTop + 4 * step, horizontalLayout.barW, verticalLayout.barH);
+        shapeSlider.setBounds     (horizontalLayout.leftX, mainTop + 5 * step, horizontalLayout.barW, verticalLayout.barH);
+        styleSlider.setBounds     (horizontalLayout.leftX, mainTop + 6 * step, horizontalLayout.barW, verticalLayout.barH);
+
+        freqSlider.setVisible (true);
+        modSlider.setVisible (true);
+        feedbackSlider.setVisible (true);
+        amountSlider.setVisible (true);
+        seriesSlider.setVisible (true);
+        shapeSlider.setVisible (true);
+        styleSlider.setVisible (true);
 
         inputSlider.setBounds (0, 0, 0, 0);
         outputSlider.setBounds (0, 0, 0, 0);
