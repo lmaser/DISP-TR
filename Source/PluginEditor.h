@@ -360,8 +360,10 @@ private:
     juce::Rectangle<float> cachedInfoGearHole;
     juce::String cachedAmountTextFull;
     juce::String cachedAmountTextShort;
+    juce::String cachedAmountIntOnly;
     juce::String cachedSeriesTextFull;
     juce::String cachedSeriesTextShort;
+    juce::String cachedSeriesIntOnly;
     juce::String cachedFreqTextHz;
     juce::String cachedFreqTextShort;
     juce::String cachedFreqIntOnly;

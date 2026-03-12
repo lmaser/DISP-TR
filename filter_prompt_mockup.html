@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>DISP-TR Filter Prompt — Current vs Proposals</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { 
+    background: #1a1a2e; color: #eee; font-family: 'Segoe UI', Arial, sans-serif; 
+    padding: 40px; display: flex; flex-direction: column; gap: 60px; align-items: center;
+  }
+  h1 { font-size: 28px; text-align: center; margin-bottom: 10px; color: #fff; }
+  h2 { font-size: 22px; margin-bottom: 8px; color: #ccc; }
+  h3 { font-size: 16px; margin-bottom: 12px; color: #aaa; font-weight: normal; }
+  .section { width: 100%; max-width: 1100px; }
+  .section-title { 
+    border-bottom: 2px solid #444; padding-bottom: 8px; margin-bottom: 20px;
+  }
+  .row { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; }
+  .card { 
+    background: #222; border-radius: 8px; padding: 24px; 
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .card-label { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+  .issues { 
+    background: #3a1515; border: 1px solid #c44; border-radius: 6px; 
+    padding: 16px; margin-top: 12px; max-width: 700px; width: 100%;
+  }
+  .issues li { margin: 6px 0; font-size: 14px; color: #faa; }
+  .issues-title { color: #f88; font-weight: bold; margin-bottom: 8px; }
+  .pros { 
+    background: #153a15; border: 1px solid #4c4; border-radius: 6px; 
+    padding: 16px; margin-top: 12px; max-width: 700px; width: 100%;
+  }
+  .pros li { margin: 6px 0; font-size: 14px; color: #afa; }
+  .pros-title { color: #8f8; font-weight: bold; margin-bottom: 8px; }
+
+  /* ================================================================
+     PROMPT FRAME (simulates JUCE AlertWindow with TRScheme)
+     ================================================================ */
+  .prompt {
+    width: 460px; height: 336px;
+    position: relative;
+    overflow: hidden;
+  }
+  .prompt-outline {
+    position: absolute; inset: 0;
+    border: 4px solid var(--fg);
+    background: var(--bg);
+  }
+  .prompt-inner {
+    position: absolute; inset: 7px;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+  }
+
+  /* Palettes */
+  .palette-default  { --fg: #c8a832; --bg: #6b2a5c; --text: #c8a832; --outline: #c8a832; }
+  .palette-graphicfx { --fg: #e8e8e8; --bg: #2a2a3a; --text: #e8e8e8; --outline: #e8e8e8; }
+  .palette-neon     { --fg: #39ff14; --bg: #0a0a0a; --text: #39ff14; --outline: #39ff14; }
+
+  /* ================================================================
+     CURRENT PROMPT RECREATION
+     ================================================================ */
+  .current-body { padding: 24px; flex: 1; display: flex; flex-direction: column; }
+  
+  .filter-section { margin-bottom: 8px; }
+  
+  .filter-header {
+    display: flex; align-items: center; height: 24px; margin-bottom: 4px;
+  }
+  .filter-label {
+    font-size: 16px; font-weight: bold; color: var(--text); width: 90px;
+  }
+  .filter-toggle {
+    width: 20px; height: 20px; border: 2px solid var(--text); margin-right: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--text);
+  }
+  .filter-toggle.on::after { content: "✓"; }
+  
+  .slope-group {
+    display: flex; align-items: center; gap: 6px; margin-left: auto;
+  }
+  .slope-btn {
+    width: 36px; height: 24px; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: bold; border: none; cursor: pointer;
+  }
+  .slope-btn.active { background: var(--fg); color: var(--bg); }
+  .slope-btn.inactive { background: var(--bg); color: var(--text); border: 1px solid var(--fg); }
+  .slope-unit { font-size: 13px; font-weight: bold; color: var(--text); margin-left: 2px; }
+
+  .freq-row {
+    display: flex; align-items: center; justify-content: center; 
+    height: 28px; margin-bottom: 4px; gap: 4px;
+  }
+  .freq-input {
+    width: 80px; height: 28px; text-align: center;
+    background: var(--bg); color: var(--text); border: none;
+    font-size: 16px; font-weight: bold;
+  }
+  /* BUG DEMO: white text on certain palettes */
+  .freq-input.bugged { color: white !important; }
+  .freq-suffix {
+    font-size: 14px; font-weight: bold; color: var(--text);
+  }
+
+  .bar-track {
+    width: 100%; height: 34px; position: relative;
+    border: 4px solid var(--outline);
+  }
+  .bar-inner {
+    position: absolute; inset: 5px;
+    background: var(--bg);
+  }
+  .bar-fill {
+    position: absolute; top: 5px; bottom: 5px; left: 5px;
+    background: var(--fg);
+  }
+
+  .prompt-footer {
+    display: flex; gap: 12px; padding: 0 24px 24px;
+  }
+  .prompt-btn {
+    flex: 1; height: 36px; font-size: 16px; font-weight: bold;
+    border: 2px solid var(--fg); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .prompt-btn.ok { background: var(--fg); color: var(--bg); }
+  .prompt-btn.cancel { background: var(--bg); color: var(--text); }
+
+  /* ================================================================
+     PROPOSAL A — Bigger text (kBoldFont40 style), same layout
+     ================================================================ */
+  .propA-body { padding: 24px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  
+  .propA-section { margin-bottom: 14px; }
+  
+  .propA-header {
+    display: flex; align-items: center; height: 32px; margin-bottom: 6px;
+  }
+  .propA-label {
+    font-size: 22px; font-weight: bold; color: var(--text); margin-right: 8px;
+  }
+  .propA-toggle {
+    width: 24px; height: 24px; border: 2px solid var(--text); margin-right: auto;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--text);
+  }
+  .propA-toggle.on::after { content: "✓"; }
+  .propA-slope-btn {
+    width: 40px; height: 28px; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: bold; border: none; cursor: pointer;
+  }
+  .propA-slope-btn.active { background: var(--fg); color: var(--bg); }
+  .propA-slope-btn.inactive { background: var(--bg); color: var(--text); border: 1px solid var(--fg); }
+  .propA-slope-unit { font-size: 15px; font-weight: bold; color: var(--text); margin-left: 4px; }
+
+  .propA-freq-row {
+    display: flex; align-items: center; justify-content: center; 
+    height: 36px; margin-bottom: 6px; gap: 6px;
+  }
+  .propA-freq-input {
+    width: 100px; height: 36px; text-align: center;
+    background: var(--bg); color: var(--text); border: none;
+    font-size: 24px; font-weight: bold;
+  }
+  .propA-freq-suffix {
+    font-size: 20px; font-weight: bold; color: var(--text);
+  }
+
+  /* ================================================================
+     PROPOSAL B — Compact, unified rows (label + value + slope inline)
+     ================================================================ */
+  .propB-body { padding: 24px; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 16px; }
+  
+  .propB-section {}
+  
+  .propB-row {
+    display: flex; align-items: center; height: 40px; gap: 8px;
+  }
+  .propB-toggle {
+    width: 26px; height: 26px; border: 2px solid var(--text); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--text);
+  }
+  .propB-toggle.on::after { content: "✓"; }
+  .propB-label {
+    font-size: 20px; font-weight: bold; color: var(--text); width: 36px;
+  }
+  .propB-freq-input {
+    width: 90px; height: 36px; text-align: center;
+    background: var(--bg); color: var(--text); border: 1px solid var(--fg);
+    font-size: 22px; font-weight: bold;
+  }
+  .propB-freq-suffix {
+    font-size: 18px; font-weight: bold; color: var(--text);
+  }
+  .propB-slope-btn {
+    width: 38px; height: 30px; display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: bold; border: none; cursor: pointer; margin-left: auto;
+  }
+  .propB-slope-btn:first-of-type { margin-left: auto; }
+  .propB-slope-btn.active { background: var(--fg); color: var(--bg); }
+  .propB-slope-btn.inactive { background: var(--bg); color: var(--text); border: 1px solid var(--fg); }
+  .propB-slope-unit { font-size: 14px; font-weight: bold; color: var(--text); margin-left: 3px; }
+
+  .propB-bar-track {
+    width: 100%; height: 28px; position: relative;
+    border: 3px solid var(--outline); margin-top: 6px;
+  }
+  .propB-bar-inner {
+    position: absolute; inset: 4px;
+    background: var(--bg);
+  }
+  .propB-bar-fill {
+    position: absolute; top: 4px; bottom: 4px; left: 4px;
+    background: var(--fg);
+  }
+
+  /* ================================================================
+     PROPOSAL C — Big centered values like ECHO-TR auto-fbk prompt
+     ================================================================ */
+  .propC-body { 
+    padding: 24px; flex: 1; display: flex; flex-direction: column; 
+    justify-content: center; gap: 6px; 
+  }
+  
+  .propC-section {}
+  
+  .propC-value-row {
+    display: flex; align-items: baseline; justify-content: center; 
+    height: 48px; gap: 4px;
+  }
+  .propC-label-prefix {
+    font-size: 28px; font-weight: bold; color: var(--text);
+  }
+  .propC-freq-value {
+    font-size: 36px; font-weight: bold; color: var(--text);
+    background: none; border: none; text-align: center; width: 120px;
+  }
+  .propC-freq-unit {
+    font-size: 22px; font-weight: bold; color: var(--text);
+  }
+  .propC-toggle-inline {
+    width: 22px; height: 22px; border: 2px solid var(--text); margin-left: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--text); vertical-align: middle;
+  }
+  .propC-toggle-inline.on::after { content: "✓"; }
+
+  .propC-slope-row {
+    display: flex; align-items: center; justify-content: center;
+    height: 30px; gap: 6px; margin-bottom: 4px;
+  }
+  .propC-slope-btn {
+    width: 44px; height: 28px; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: bold; border: none; cursor: pointer;
+  }
+  .propC-slope-btn.active { background: var(--fg); color: var(--bg); }
+  .propC-slope-btn.inactive { background: var(--bg); color: var(--text); border: 1px solid var(--fg); }
+  .propC-slope-unit { font-size: 14px; font-weight: bold; color: var(--text); }
+
+  .propC-bar-track {
+    width: 100%; height: 24px; position: relative;
+    border: 3px solid var(--outline);
+  }
+  .propC-bar-inner { position: absolute; inset: 4px; background: var(--bg); }
+  .propC-bar-fill { position: absolute; top: 4px; bottom: 4px; left: 4px; background: var(--fg); }
+
+  /* Annotations */
+  .annotation {
+    position: absolute; font-size: 11px; color: #f88; 
+    background: rgba(200,50,50,0.85); padding: 2px 6px; border-radius: 3px;
+    white-space: nowrap; pointer-events: none;
+  }
+
+  /* Description boxes */
+  .desc { 
+    max-width: 700px; font-size: 14px; line-height: 1.6; color: #ccc; 
+    margin-top: 8px; padding: 12px; background: #2a2a3a; border-radius: 6px;
+  }
+  .desc strong { color: #fff; }
+  .desc code { background: #333; padding: 2px 6px; border-radius: 3px; font-size: 13px; color: #ffa; }
+</style>
+</head>
+<body>
+
+<h1>DISP-TR — Filter Prompt Analysis & Proposals</h1>
+
+<!-- ============================================================ -->
+<div class="section">
+  <div class="section-title">
+    <h2>CURRENT IMPLEMENTATION</h2>
+    <h3>Prompt actual tal como está implementado (460×336px, fuentes 13-16px)</h3>
+  </div>
+  
+  <div class="row">
+    <!-- Default palette -->
+    <div class="card">
+      <div class="card-label">Default Palette (gold/purple)</div>
+      <div class="prompt palette-default">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="current-body">
+            <!-- HP Section -->
+            <div class="filter-section">
+              <div class="filter-header">
+                <span class="filter-label">HP FILTER</span>
+                <div class="filter-toggle on"></div>
+                <div class="slope-group">
+                  <div class="slope-btn active">6</div>
+                  <div class="slope-btn inactive">12</div>
+                  <div class="slope-btn inactive">24</div>
+                  <span class="slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="freq-row">
+                <input class="freq-input" value="89" readonly>
+                <span class="freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+
+            <!-- LP Section -->
+            <div class="filter-section">
+              <div class="filter-header">
+                <span class="filter-label">LP FILTER</span>
+                <div class="filter-toggle on"></div>
+                <div class="slope-group">
+                  <div class="slope-btn inactive">6</div>
+                  <div class="slope-btn inactive">12</div>
+                  <div class="slope-btn active">24</div>
+                  <span class="slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="freq-row">
+                <input class="freq-input" value="3299" readonly>
+                <span class="freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Graphic FX palette (BUG visible here) -->
+    <div class="card">
+      <div class="card-label">Graphic FX Palette (light/dark) — <span style="color:#f88">BUG</span></div>
+      <div class="prompt palette-graphicfx" style="position:relative">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="current-body">
+            <div class="filter-section">
+              <div class="filter-header">
+                <span class="filter-label">HP FILTER</span>
+                <div class="filter-toggle on"></div>
+                <div class="slope-group">
+                  <div class="slope-btn active">6</div>
+                  <div class="slope-btn inactive">12</div>
+                  <div class="slope-btn inactive">24</div>
+                  <span class="slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="freq-row">
+                <!-- BUG: white text regardless of palette -->
+                <input class="freq-input bugged" value="89" readonly style="color: white !important;">
+                <span class="freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div class="filter-section">
+              <div class="filter-header">
+                <span class="filter-label">LP FILTER</span>
+                <div class="filter-toggle on"></div>
+                <div class="slope-group">
+                  <div class="slope-btn inactive">6</div>
+                  <div class="slope-btn inactive">12</div>
+                  <div class="slope-btn active">24</div>
+                  <span class="slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="freq-row">
+                <input class="freq-input bugged" value="3299" readonly style="color: white !important;">
+                <span class="freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+        <div class="annotation" style="top: 130px; left: 150px;">⚠ TextEditor text color = white<br>(not scheme.text)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="issues">
+    <div class="issues-title">🔴 Problemas detectados</div>
+    <ul>
+      <li><strong>Bug de color:</strong> El <code>addTextEditor()</code> de JUCE crea un Label interno al TextEditor que usa el color de texto por defecto de JUCE (blanco). Aunque se setea <code>TextEditor::textColourId → scheme.text</code>, el Label wrapper del AlertWindow no se actualiza. En paletas claras (graphic FX), el texto blanco se distingue del <code>scheme.text</code>.</li>
+      <li><strong>Fuente demasiado pequeña:</strong> Usa <code>FontOptions(16px)</code> para labels y <code>FontOptions(13-14px)</code> para dB/oct y Hz. El prompt de ECHO-TR (auto-fbk) usa <code>kBoldFont40()</code> (40px). El contraste de tamaño es muy grande.</li>
+      <li><strong>Muchos elementos visualmente densos:</strong> Cada sección tiene 3 filas (label+toggle+slopes / freq+Hz / bar) = Layout apretado en 336px de alto.</li>
+      <li><strong>Slope buttons muy pequeños:</strong> 36×24px con fuente 13px — difíciles de clickar y leer.</li>
+      <li><strong>Toggle checkbox muy pequeño:</strong> 28×28px al lado del label, fácil de no ver.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+  <div class="section-title">
+    <h2>PROPUESTA A — Texto grande, mismo layout</h2>
+    <h3>Escalar fuentes a ~22-24px para labels y ~24px para freq. Mantener la estructura actual pero más legible.</h3>
+  </div>
+  
+  <div class="row">
+    <div class="card">
+      <div class="card-label">Default Palette</div>
+      <div class="prompt palette-default">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propA-body">
+            <div class="propA-section">
+              <div class="propA-header">
+                <span class="propA-label">HP</span>
+                <div class="propA-toggle on"></div>
+                <div class="slope-group">
+                  <div class="propA-slope-btn active">6</div>
+                  <div class="propA-slope-btn inactive">12</div>
+                  <div class="propA-slope-btn inactive">24</div>
+                  <span class="propA-slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="propA-freq-row">
+                <input class="propA-freq-input" value="89" readonly>
+                <span class="propA-freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track" style="height:28px">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div class="propA-section">
+              <div class="propA-header">
+                <span class="propA-label">LP</span>
+                <div class="propA-toggle on"></div>
+                <div class="slope-group">
+                  <div class="propA-slope-btn inactive">6</div>
+                  <div class="propA-slope-btn inactive">12</div>
+                  <div class="propA-slope-btn active">24</div>
+                  <span class="propA-slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="propA-freq-row">
+                <input class="propA-freq-input" value="3299" readonly>
+                <span class="propA-freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track" style="height:28px">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Graphic FX Palette</div>
+      <div class="prompt palette-graphicfx">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propA-body">
+            <div class="propA-section">
+              <div class="propA-header">
+                <span class="propA-label">HP</span>
+                <div class="propA-toggle on"></div>
+                <div class="slope-group">
+                  <div class="propA-slope-btn active">6</div>
+                  <div class="propA-slope-btn inactive">12</div>
+                  <div class="propA-slope-btn inactive">24</div>
+                  <span class="propA-slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="propA-freq-row">
+                <input class="propA-freq-input" value="89" readonly>
+                <span class="propA-freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track" style="height:28px">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div class="propA-section">
+              <div class="propA-header">
+                <span class="propA-label">LP</span>
+                <div class="propA-toggle on"></div>
+                <div class="slope-group">
+                  <div class="propA-slope-btn inactive">6</div>
+                  <div class="propA-slope-btn inactive">12</div>
+                  <div class="propA-slope-btn active">24</div>
+                  <span class="propA-slope-unit">dB/oct</span>
+                </div>
+              </div>
+              <div class="propA-freq-row">
+                <input class="propA-freq-input" value="3299" readonly>
+                <span class="propA-freq-suffix">Hz</span>
+              </div>
+              <div class="bar-track" style="height:28px">
+                <div class="bar-inner"></div>
+                <div class="bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="desc">
+    <strong>Cambios:</strong> Subir fuentes de labels a 22px, freq value a 24px, slopes a 16px, Hz suffix a 20px. 
+    Labels acortados a "HP"/"LP" (el toggle ya indica que es filtro).
+    Misma estructura 3-filas por sección. Altura de barra reducida a 28px para ganar espacio vertical.
+  </div>
+  <div class="pros">
+    <div class="pros-title">✅ Ventajas</div>
+    <ul>
+      <li>Mínimo cambio de código — solo escalar fuentes y ajustar alturas</li>
+      <li>Consistente con la estructura actual</li>
+      <li>Texto mucho más legible</li>
+    </ul>
+  </div>
+  <div class="issues">
+    <div class="issues-title">⚠ Limitaciones</div>
+    <ul>
+      <li>Sigue siendo denso — 3 filas por sección en 336px</li>
+      <li>Slope buttons siguen relativamente pequeños</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+  <div class="section-title">
+    <h2>PROPUESTA B — Filas compactas (todo inline)</h2>
+    <h3>Cada sección en 2 filas: [toggle + label + freq + slopes] + [bar]. Reduce densidad visual.</h3>
+  </div>
+  
+  <div class="row">
+    <div class="card">
+      <div class="card-label">Default Palette</div>
+      <div class="prompt palette-default">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propB-body">
+            <div class="propB-section">
+              <div class="propB-row">
+                <div class="propB-toggle on"></div>
+                <span class="propB-label">HP</span>
+                <input class="propB-freq-input" value="89" readonly>
+                <span class="propB-freq-suffix">Hz</span>
+                <div class="propB-slope-btn active">6</div>
+                <div class="propB-slope-btn inactive">12</div>
+                <div class="propB-slope-btn inactive">24</div>
+                <span class="propB-slope-unit">dB/oct</span>
+              </div>
+              <div class="propB-bar-track">
+                <div class="propB-bar-inner"></div>
+                <div class="propB-bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div class="propB-section">
+              <div class="propB-row">
+                <div class="propB-toggle on"></div>
+                <span class="propB-label">LP</span>
+                <input class="propB-freq-input" value="3299" readonly>
+                <span class="propB-freq-suffix">Hz</span>
+                <div class="propB-slope-btn inactive">6</div>
+                <div class="propB-slope-btn inactive">12</div>
+                <div class="propB-slope-btn active">24</div>
+                <span class="propB-slope-unit">dB/oct</span>
+              </div>
+              <div class="propB-bar-track">
+                <div class="propB-bar-inner"></div>
+                <div class="propB-bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Graphic FX Palette</div>
+      <div class="prompt palette-graphicfx">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propB-body">
+            <div class="propB-section">
+              <div class="propB-row">
+                <div class="propB-toggle on"></div>
+                <span class="propB-label">HP</span>
+                <input class="propB-freq-input" value="89" readonly>
+                <span class="propB-freq-suffix">Hz</span>
+                <div class="propB-slope-btn active">6</div>
+                <div class="propB-slope-btn inactive">12</div>
+                <div class="propB-slope-btn inactive">24</div>
+                <span class="propB-slope-unit">dB/oct</span>
+              </div>
+              <div class="propB-bar-track">
+                <div class="propB-bar-inner"></div>
+                <div class="propB-bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div class="propB-section">
+              <div class="propB-row">
+                <div class="propB-toggle on"></div>
+                <span class="propB-label">LP</span>
+                <input class="propB-freq-input" value="3299" readonly>
+                <span class="propB-freq-suffix">Hz</span>
+                <div class="propB-slope-btn inactive">6</div>
+                <div class="propB-slope-btn inactive">12</div>
+                <div class="propB-slope-btn active">24</div>
+                <span class="propB-slope-unit">dB/oct</span>
+              </div>
+              <div class="propB-bar-track">
+                <div class="propB-bar-inner"></div>
+                <div class="propB-bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="desc">
+    <strong>Cambios:</strong> Agrupar toggle + label + freq input + Hz + slope buttons todo en una sola fila horizontal.
+    La barra de drag debajo. 2 filas por sección en vez de 3. Más espacio vertical libre.
+    Fuentes a 20-22px para freq, 15-16px para slopes.
+  </div>
+  <div class="pros">
+    <div class="pros-title">✅ Ventajas</div>
+    <ul>
+      <li>Más limpio — todo en una línea, escaneo horizontal intuitivo</li>
+      <li>Más espacio vertical → permite prompt más bajo o fuentes aún más grandes</li>
+      <li>Toggle visible inmediatamente al lado del label</li>
+    </ul>
+  </div>
+  <div class="issues">
+    <div class="issues-title">⚠ Limitaciones</div>
+    <ul>
+      <li>Fila horizontal puede quedar apretada en 460px con todos los elementos</li>
+      <li>Rompe un poco la consistencia con el prompt de ECHO-TR (que tiene value centrado + bar debajo)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section">
+  <div class="section-title">
+    <h2>PROPUESTA C — Estilo ECHO-TR (valor grande centrado)</h2>
+    <h3>Misma filosofía que el prompt de auto-feedback de ECHO-TR: valor grande centrado con label prefijo, slopes debajo, bar debajo.</h3>
+  </div>
+  
+  <div class="row">
+    <div class="card">
+      <div class="card-label">Default Palette</div>
+      <div class="prompt palette-default">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propC-body">
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">HP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="89" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn active">6</div>
+                <div class="propC-slope-btn inactive">12</div>
+                <div class="propC-slope-btn inactive">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div style="height: 12px"></div>
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">LP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="3299" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn inactive">6</div>
+                <div class="propC-slope-btn inactive">12</div>
+                <div class="propC-slope-btn active">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Graphic FX Palette</div>
+      <div class="prompt palette-graphicfx">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propC-body">
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">HP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="89" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn active">6</div>
+                <div class="propC-slope-btn inactive">12</div>
+                <div class="propC-slope-btn inactive">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 22%"></div>
+              </div>
+            </div>
+            <div style="height: 12px"></div>
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">LP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="3299" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn inactive">6</div>
+                <div class="propC-slope-btn inactive">12</div>
+                <div class="propC-slope-btn active">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 62%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Neon Palette (test)</div>
+      <div class="prompt palette-neon">
+        <div class="prompt-outline"></div>
+        <div class="prompt-inner">
+          <div class="propC-body">
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">HP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="250" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn inactive">6</div>
+                <div class="propC-slope-btn active">12</div>
+                <div class="propC-slope-btn inactive">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 36%"></div>
+              </div>
+            </div>
+            <div style="height: 12px"></div>
+            <div class="propC-section">
+              <div class="propC-value-row">
+                <span class="propC-label-prefix">LP</span>
+                <div class="propC-toggle-inline on" style="margin-right: 6px"></div>
+                <input class="propC-freq-value" value="8000" readonly>
+                <span class="propC-freq-unit">Hz</span>
+              </div>
+              <div class="propC-slope-row">
+                <div class="propC-slope-btn inactive">6</div>
+                <div class="propC-slope-btn inactive">12</div>
+                <div class="propC-slope-btn active">24</div>
+                <span class="propC-slope-unit">dB/oct</span>
+              </div>
+              <div class="propC-bar-track">
+                <div class="propC-bar-inner"></div>
+                <div class="propC-bar-fill" style="width: 79%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-footer">
+            <div class="prompt-btn ok">OK</div>
+            <div class="prompt-btn cancel">CANCEL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="desc">
+    <strong>Cambios:</strong> Adoptar el patrón visual de ECHO-TR: <code>[HP] [✓] [89] [Hz]</code> centrado en fila con font ~28-36px.
+    Slopes centrados debajo en su propia fila. Bar debajo de todo. Consistente con los otros prompts de la suite TR.
+    Usar <code>kBoldFont40()</code> o un tamaño derivado (28-36px) para el valor, que es lo que hace ECHO-TR.
+  </div>
+  <div class="pros">
+    <div class="pros-title">✅ Ventajas</div>
+    <ul>
+      <li><strong>Consistencia con ECHO-TR</strong> — misma filosofía visual que el prompt de auto-feedback</li>
+      <li>Valores grandes y legibles — fácil lectura incluso en pantallas pequeñas</li>
+      <li>Jerarquía visual clara: valor prominente → controles secundarios → barra</li>
+      <li>Toggle integrado en la fila del valor, visible pero no invasivo</li>
+    </ul>
+  </div>
+  <div class="issues">
+    <div class="issues-title">⚠ Limitaciones</div>
+    <ul>
+      <li>3 filas por sección (value + slopes + bar) — igual que el actual pero con mejor distribución</li>
+      <li>Si el prompt fuera más alto (e.g. 380px) cabría todo aún más cómodo</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="section" style="margin-top: 20px; padding: 20px; background: #222; border-radius: 8px;">
+  <h2 style="color: #8f8; margin-bottom: 12px;">MI RECOMENDACIÓN</h2>
+  <div class="desc" style="max-width: 100%; margin: 0;">
+    <p><strong>Propuesta C</strong> es la mejor opción porque:</p>
+    <ul style="margin: 12px 0; padding-left: 20px;">
+      <li>Es <strong>consistente</strong> con el prompt de auto-feedback de ECHO-TR (valor grande centrado + bar debajo)</li>
+      <li>Resuelve el problema de legibilidad escalando al estilo <code>kBoldFont40()</code></li>
+      <li>Mantiene una <strong>jerarquía visual clara</strong>: lo más importante (frecuencia) es lo más grande</li>
+      <li>Los slope buttons centrados debajo son más accesibles que pegados a la derecha</li>
+      <li>El toggle inline junto al label es compacto y visible</li>
+    </ul>
+    <p style="margin-top: 12px;"><strong>Sobre el bug de color:</strong> Independientemente de la propuesta elegida, hay que asegurar que todos los <code>TextEditor</code>, <code>Label</code> y <code>TextButton</code> creados en el prompt usen <code>scheme.text</code> explícitamente para textColourId. El bug actual viene de que JUCE's <code>addTextEditor()</code> crea un label wrapper con color por defecto.</p>
+  </div>
+</div>
+
+</body>
+</html>
