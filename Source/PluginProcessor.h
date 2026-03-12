@@ -27,6 +27,13 @@ public:
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
 
+	static constexpr const char* kParamFilterHpFreq  = "filter_hp_freq";
+	static constexpr const char* kParamFilterLpFreq  = "filter_lp_freq";
+	static constexpr const char* kParamFilterHpSlope = "filter_hp_slope";
+	static constexpr const char* kParamFilterLpSlope = "filter_lp_slope";
+	static constexpr const char* kParamFilterHpOn    = "filter_hp_on";
+	static constexpr const char* kParamFilterLpOn    = "filter_lp_on";
+
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -67,6 +74,14 @@ public:
 	static constexpr int kStyleMin     = 0;
 	static constexpr int kStyleMax     = 3;         // 0 = MONO, 1 = STEREO, 2 = WIDE, 3 = DUAL
 	static constexpr float kStyleDefault = 1.0f;    // STEREO by default
+
+	static constexpr float kFilterFreqMin     = 20.0f;
+	static constexpr float kFilterFreqMax     = 20000.0f;
+	static constexpr float kFilterHpFreqDefault = 250.0f;
+	static constexpr float kFilterLpFreqDefault = 2000.0f;
+	static constexpr int   kFilterSlopeMin     = 0;       // 6 dB/oct
+	static constexpr int   kFilterSlopeMax     = 2;       // 24 dB/oct
+	static constexpr int   kFilterSlopeDefault = 1;       // 12 dB/oct
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -199,6 +214,31 @@ private:
 	// Pre-allocated dry buffer for mix blend (avoids malloc in processBlock)
 	juce::AudioBuffer<float> dryBuffer;
 
+public:
+	// ── Wet filter (HP + LP) ──
+	struct WetFilterBiquadCoeffs { float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f; };
+	struct WetFilterBiquadState  { float z1 = 0.0f, z2 = 0.0f; };
+private:
+	struct WetFilterChannelState
+	{
+		WetFilterBiquadState hp[2];   // up to 2 cascaded sections (24 dB/oct)
+		WetFilterBiquadState lp[2];
+		void reset() { *this = {}; }
+	};
+	WetFilterChannelState wetFilterState_[2];       // L, R
+	WetFilterBiquadCoeffs hpCoeffs_[2];             // section 0, 1
+	WetFilterBiquadCoeffs lpCoeffs_[2];
+	float smoothedFilterHpFreq_ = kFilterHpFreqDefault;
+	float smoothedFilterLpFreq_ = kFilterLpFreqDefault;
+	float lastCalcHpFreq_ = -1.0f;
+	float lastCalcLpFreq_ = -1.0f;
+	int   lastCalcHpSlope_ = -1;
+	int   lastCalcLpSlope_ = -1;
+	static constexpr int kFilterCoeffUpdateInterval = 32;
+	int   filterCoeffCountdown_ = 0;
+
+	void updateFilterCoeffs (bool forceHp, bool forceLp);
+
 	std::atomic<float>* inputParam = nullptr;
 	std::atomic<float>* outputParam = nullptr;
 	std::atomic<float>* amountParam = nullptr;
@@ -213,6 +253,12 @@ private:
 	std::atomic<float>* midiParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
+	std::atomic<float>* filterHpFreqParam  = nullptr;
+	std::atomic<float>* filterLpFreqParam  = nullptr;
+	std::atomic<float>* filterHpSlopeParam = nullptr;
+	std::atomic<float>* filterLpSlopeParam = nullptr;
+	std::atomic<float>* filterHpOnParam    = nullptr;
+	std::atomic<float>* filterLpOnParam    = nullptr;
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;

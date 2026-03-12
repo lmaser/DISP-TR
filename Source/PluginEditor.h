@@ -120,6 +120,57 @@ private:
     BarSlider outputSlider;
     BarSlider mixSlider;
 
+    using DISPScheme = TR::TRScheme;
+
+    // ── Filter bar (dual HP/LP marker component) ──
+    class FilterBarComponent : public juce::Component,
+                               public juce::SettableTooltipClient
+    {
+    public:
+        void setOwner (DisperserAudioProcessorEditor* o) { owner = o; }
+        void setScheme (const DISPScheme& s) { scheme = s; repaint(); }
+
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseMove (const juce::MouseEvent& e) override;
+        void mouseDoubleClick (const juce::MouseEvent& e) override;
+
+        void updateFromProcessor();
+
+        float getHpFreq() const { return hpFreq_; }
+        float getLpFreq() const { return lpFreq_; }
+        bool  isHpOn()    const { return hpOn_; }
+        bool  isLpOn()    const { return lpOn_; }
+
+    private:
+        DisperserAudioProcessorEditor* owner = nullptr;
+        DISPScheme scheme {};
+
+        float hpFreq_ = 250.0f;
+        float lpFreq_ = 2000.0f;
+        bool  hpOn_   = false;
+        bool  lpOn_   = false;
+
+        enum DragTarget { None, HP, LP };
+        DragTarget currentDrag_ = None;
+
+        static constexpr float kMinFreq = 20.0f;
+        static constexpr float kMaxFreq = 20000.0f;
+        static constexpr float kPad     = 7.0f;
+        static constexpr int   kMarkerHitPx = 10;
+
+        juce::Rectangle<float> getInnerArea() const;
+        float freqToNormX (float freq) const;
+        float normXToFreq (float normX) const;
+        float getMarkerScreenX (float freq) const;
+        DragTarget hitTestMarker (juce::Point<float> p) const;
+        void  setFreqFromMouseX (float mouseX, DragTarget target);
+    };
+
+    FilterBarComponent filterBar_;
+
     juce::ToggleButton invButton;
     juce::ToggleButton midiButton;
     juce::Label midiChannelDisplay;
@@ -143,8 +194,6 @@ private:
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
-
-    using DISPScheme = TR::TRScheme;
 
     DISPScheme activeScheme;
 
@@ -279,6 +328,11 @@ private:
     juce::String getOutputText() const;
     juce::String getOutputTextShort() const;
 
+    juce::String getFilterText() const;
+    juce::String getFilterTextShort() const;
+
+    void openFilterPrompt();
+
     int getTargetValueColumnWidth() const;
 
     void sliderValueChanged (juce::Slider* slider) override;
@@ -332,12 +386,15 @@ private:
     juce::String cachedOutputTextFull;
     juce::String cachedOutputTextShort;
     juce::String cachedOutputIntOnly;
+    juce::String cachedFilterTextFull;
+    juce::String cachedFilterTextShort;
     mutable std::uint64_t cachedValueColumnWidthKey = 0;
     mutable int cachedValueColumnWidth = 90;
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
     std::array<juce::Rectangle<int>, 10> cachedValueAreas_;
+    juce::Rectangle<int> cachedFilterValueArea_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
