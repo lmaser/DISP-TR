@@ -1959,9 +1959,9 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     // Clickable slope labels (cycle 6→12→24→6 on click)
     auto slopeToText = [] (int s) -> juce::String
     {
-        if (s == 0) return "6 dB/oct";
-        if (s == 1) return "12 dB/oct";
-        return "24 dB/oct";
+        if (s == 0) return "6dB";
+        if (s == 1) return "12dB";
+        return "24dB";
     };
 
     auto* hpSlopeLabel = new juce::Label ("", slopeToText (hpSlope));
@@ -2114,11 +2114,11 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     layoutAlertWindowButtons (*aw);
 
     const int margin     = kPromptInnerMargin;
-    const int toggleSide = 32;
+    const int toggleSide = 26;
 
-    // Use the same font as other prompts (kBoldFont40 = 40 pt Bold)
-    const juce::Font& promptFont = kBoldFont40();
-    const juce::Font  slopeFont (juce::FontOptions (30.0f).withStyle ("Bold"));
+    // Slightly smaller than the standard 40 pt so the row fits at min width
+    const juce::Font  promptFont (juce::FontOptions (34.0f).withStyle ("Bold"));
+    const juce::Font  slopeFont  (juce::FontOptions (24.0f).withStyle ("Bold"));
 
     // ── Create persistent labels (repositioned by layoutRows) ──
     auto* hpNameLabel = new juce::Label ("", "HP");
@@ -2153,6 +2153,29 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     preparePromptTextEditor (*aw, "hpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
     preparePromptTextEditor (*aw, "lpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
 
+    // Clicking the HP / LP name label toggles its checkbox
+    struct ToggleForwarder : public juce::MouseListener
+    {
+        juce::ToggleButton* toggle = nullptr;
+        void mouseDown (const juce::MouseEvent&) override
+        {
+            if (toggle != nullptr)
+                toggle->setToggleState (! toggle->getToggleState(), juce::sendNotification);
+        }
+    };
+    hpNameLabel->setInterceptsMouseClicks (true, false);
+    auto* hpFwd = new ToggleForwarder();
+    hpFwd->toggle = hpToggle;
+    hpNameLabel->addMouseListener (hpFwd, false);
+
+    lpNameLabel->setInterceptsMouseClicks (true, false);
+    auto* lpFwd = new ToggleForwarder();
+    lpFwd->toggle = lpToggle;
+    lpNameLabel->addMouseListener (lpFwd, false);
+
+    auto hpFwdGuard = std::shared_ptr<ToggleForwarder> (hpFwd);
+    auto lpFwdGuard = std::shared_ptr<ToggleForwarder> (lpFwd);
+
     // ── Re-callable layout (ECHO-TR visual-centering approach) ──
     auto layoutRows = [aw, hpToggle, lpToggle,
                         hpNameLabel, lpNameLabel, hpHzLabel, lpHzLabel,
@@ -2172,64 +2195,62 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
         const int totalH     = rowTotal * 2 + gap;
         const int startY     = juce::jmax (kPromptEditorMinTopPx, (buttonsTop - totalH) / 2);
 
-        const int contentPad = kPromptInlineContentPadPx;
-        const int contentW   = aw->getWidth() - contentPad * 2;
-        const int spaceW     = juce::jmax (2, stringWidth (promptFont, " "));
+        // Bar edges — these are the alignment anchors
+        const int barX = margin;
+        const int barR = aw->getWidth() - margin;
 
-        // Fixed visual widths
-        const int toggleVisW = toggleSide + 6;
+        // Toggle visual offset (footer-style: label flush with visual checkbox)
+        constexpr int toggleVisualInsetLeft = 2;
+        constexpr int tglGap = 4;
+        const int toggleVisualSide = juce::jlimit (14,
+                                                   juce::jmax (14, toggleSide - 2),
+                                                   (int) std::lround ((double) toggleSide * 0.65));
+        const int labelOffset = toggleVisualInsetLeft + toggleVisualSide + tglGap;
+
+        // Static widths: HP/LP use slopeFont (same size as dB label)
+        const int nameW  = stringWidth (slopeFont, "LP") + 2;
+        const int slopeW = stringWidth (slopeFont, "24dB") + 4;
+        const int hzGap  = 2;   // tiny gap number→Hz
+        const int hzW    = stringWidth (promptFont, "Hz") + 2;
 
         auto placeRow = [&] (juce::ToggleButton* toggle, juce::Label* nameLabel,
                              juce::TextEditor* te, juce::Label* hzLabel,
                              juce::Label* slopeLabel, PromptBar* bar, int y)
         {
-            const auto& teFont = te->getFont();
-            nameLabel->setFont (teFont);
-            hzLabel->setFont (teFont);
+            nameLabel->setFont (slopeFont);
+            hzLabel->setFont (promptFont);
             slopeLabel->setFont (slopeFont);
 
-            const int nameW  = stringWidth (teFont, nameLabel->getText()) + 2;
-            const auto txt   = te->getText();
-            const int textW  = juce::jmax (1, stringWidth (teFont, txt));
-            const int realHzW = stringWidth (teFont, "Hz") + 2;
-            const int slopeW = stringWidth (slopeFont, slopeLabel->getText()) + 2;
+            // ── Left anchor: toggle at bar left edge ──
+            toggle->setBounds (barX, y + (rowH - toggleSide) / 2, toggleSide, toggleSide);
 
-            // Visual width: [toggle gap][name][sp][text][sp][Hz][sp*2][slope]
-            const int visualW = toggleVisW + nameW + spaceW + textW + spaceW + realHzW + spaceW * 2 + slopeW;
-            const int centerX = contentPad + contentW / 2;
-            int blockLeft = centerX - visualW / 2;
-            blockLeft = juce::jlimit (contentPad,
-                                       juce::jmax (contentPad, contentPad + contentW - visualW),
-                                       blockLeft);
-
-            // Toggle
-            toggle->setBounds (blockLeft, y + (rowH - toggleSide) / 2, toggleSide, toggleSide);
-
-            // Name label ("HP" / "LP")
-            const int nameX = blockLeft + toggleVisW;
+            // Name ("HP"/"LP") flush with visual checkbox
+            const int nameX = barX + labelOffset;
             nameLabel->setBounds (nameX, y, nameW, rowH);
 
-            // TextEditor — align visible text within editor
-            constexpr int kEditorTextPadPx = 12;
-            constexpr int kMinEditorWidthPx = 24;
-            const int editorW = juce::jlimit (kMinEditorWidthPx, 120, textW + kEditorTextPadPx * 2);
-            int teX = nameX + nameW + spaceW - (editorW - textW) / 2;
-            teX = juce::jlimit (contentPad,
-                                juce::jmax (contentPad, contentPad + contentW - editorW),
-                                teX);
-            te->setBounds (teX, y, editorW, rowH);
+            // ── Right anchor: slope flush with bar right edge ──
+            const int slopeX = barR - slopeW;
+            slopeLabel->setBounds (slopeX, y, slopeW, rowH);
 
-            // Hz label right after visible text
-            const int hzX = nameX + nameW + spaceW + textW;
-            hzLabel->setBounds (hzX, y, realHzW + spaceW, rowH);
+            // ── Middle zone: number + Hz, dynamically sized, centred ──
+            const int midL = nameX + nameW;      // left limit
+            const int midR = slopeX;              // right limit
+            const int midW = midR - midL;
 
-            // Slope label after Hz
-            const int slopeX = hzX + realHzW + spaceW;
-            slopeLabel->setBounds (slopeX, y, slopeW + 4, rowH);
+            const auto txt   = te->getText();
+            const int textW  = juce::jmax (1, stringWidth (promptFont, txt));
+            constexpr int kEditorPad = 6;
+            const int editorW = textW + kEditorPad * 2;
+            const int groupW  = editorW + hzGap + hzW;
 
-            // Bar below, aligned to prompt margins
-            const int barX = margin;
-            const int barW = juce::jmax (60, aw->getWidth() - margin * 2);
+            // Centre number+Hz within the middle zone
+            const int groupX = midL + juce::jmax (0, (midW - groupW) / 2);
+
+            te->setBounds (groupX, y, editorW, rowH);
+            hzLabel->setBounds (groupX + editorW + hzGap, y, hzW, rowH);
+
+            // Bar spans full width margin→margin
+            const int barW = juce::jmax (60, barR - barX);
             bar->setBounds (barX, y + rowH + barGap, barW, barH);
         };
 
@@ -2256,13 +2277,21 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     const bool  origHpOn    = hpOn;
     const bool  origLpOn    = lpOn;
 
-    setPromptOverlayActive (true);
+    fitAlertWindowToEditor (*aw, safeThis.getComponent(), [layoutRows] (juce::AlertWindow& a)
+    {
+        layoutAlertWindowButtons (a);
+        layoutRows();
+    });
+
+    embedAlertWindowInOverlay (safeThis.getComponent(), aw);
 
     aw->enterModalState (true,
         juce::ModalCallbackFunction::create (
             [safeThis, aw, origHpFreq, origLpFreq, origHpSlope, origLpSlope, origHpOn, origLpOn,
-             hpCyclerGuard, lpCyclerGuard] (int result)
+             hpCyclerGuard, lpCyclerGuard, hpFwdGuard, lpFwdGuard] (int result)
         {
+            std::unique_ptr<juce::AlertWindow> killer (aw);
+
             if (safeThis == nullptr)
                 return;
 
@@ -2288,9 +2317,8 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
             }
 
             safeThis->setPromptOverlayActive (false);
-        }));
-
-    embedAlertWindowInOverlay (safeThis.getComponent(), aw);
+        }),
+        false);
 }
 
 // ── MIDI Channel Prompt ───────────────────────────────────────────
