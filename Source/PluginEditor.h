@@ -31,6 +31,9 @@ private:
     void openInfoPopup();
     void openGraphicsPopup();
     void openMidiChannelPrompt();
+    void openChaosConfigPrompt (const char* amtParamId, const char* spdParamId, const juce::String& title);
+    void openChaosFilterPrompt();
+    void openChaosDelayPrompt();
     void setPromptOverlayActive (bool shouldBeActive);
 
     DisperserAudioProcessor& audioProcessor;
@@ -60,15 +63,7 @@ private:
             if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
             {
                 double percent = v * 100.0;
-                juce::String t (percent, 4);
-                if (t.containsChar ('.'))
-                {
-                    while (t.endsWithChar ('0'))
-                        t = t.dropLastCharacters (1);
-                    if (t.endsWithChar ('.'))
-                        t = t.dropLastCharacters (1);
-                }
-                return t;
+                return juce::String (percent, 1);
             }
 
             if (owner != nullptr && this == &owner->modSlider)
@@ -175,6 +170,12 @@ private:
     juce::ToggleButton midiButton;
     juce::Label midiChannelDisplay;
 
+    // Chaos buttons
+    juce::ToggleButton chaosFilterButton;
+    juce::ToggleButton chaosDelayButton;
+    juce::Label chaosFilterDisplay;
+    juce::Label chaosDelayDisplay;
+
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
@@ -191,6 +192,8 @@ private:
 
     std::unique_ptr<ButtonAttachment> invAttachment;
     std::unique_ptr<ButtonAttachment> midiAttachment;
+    std::unique_ptr<ButtonAttachment> chaosFilterAttachment;
+    std::unique_ptr<ButtonAttachment> chaosDelayAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
@@ -247,6 +250,10 @@ private:
                           bool ticked, bool isEnabled,
                           bool shouldDrawButtonAsHighlighted,
                           bool shouldDrawButtonAsDown) override;
+
+        void drawToggleButton (juce::Graphics&, juce::ToggleButton&,
+                              bool shouldDrawButtonAsHighlighted,
+                              bool shouldDrawButtonAsDown) override;
 
         void drawButtonBackground (juce::Graphics& g,
                        juce::Button& button,

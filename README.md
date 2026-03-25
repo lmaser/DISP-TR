@@ -1,4 +1,4 @@
-# DISP-TR v1.3
+# DISP-TR v1.4
 
 <br/><br/>
 
@@ -52,10 +52,10 @@ Frequency multiplier. The slider range 0–1 maps non-linearly:
 
 Center position (0.5) = 1.0x (no modification).
 
-### FEEDBACK (0–100%)
+### FEEDBACK (−100 to +100%)
 
-Feeds the all-pass chain output back into its input, creating resonant peaks.  
-Uses smoothstep mapping (3x²−2x³) for musical control: gentle at low values, increasingly intense toward the top.  
+Feeds the all-pass chain output back into its input, creating resonant peaks. Negative values invert the feedback polarity, producing a different set of resonant frequencies (notch-to-peak inversion).  
+Uses sign-preserving bipolar smoothstep mapping for musical control: gentle at low values, increasingly intense toward the extremes.  
 Smoothed linearly (50 ms time constant).
 
 ### STAGES (0–128)
@@ -124,19 +124,48 @@ When active, incoming MIDI note-on messages override the frequency slider with t
 MIDI velocity controls glide speed (higher velocity = faster transitions).  
 Channel can be configured via right-click on the MIDI channel display (0 = omni, 1–16 = specific).
 
+### CHAOS
+
+Micro-variation engine that adds organic randomness to the effect. Two independent chaos targets:
+
+- **CHAOS F (Filter)**: Modulates the HP/LP filter cutoff frequencies when filters are enabled. Creates evolving tonal movement.
+- **CHAOS D (Disperser)**: Modulates the center FREQUENCY parameter. Produces drifting, alive-sounding dispersion.
+
+Each chaos target has its own toggle and shares two global controls:
+
+- **AMOUNT (0–100%)**: Modulation depth — how far from the base value the parameter can drift. Default: 50%.
+- **SPEED (0.01–100 Hz)**: Sample-and-hold rate — how often a new random target is picked. Default: 5 Hz.
+
+Uses exponential smoothing between random targets for glitch-free transitions.
+
 ## Technical Details
 
 ### DSP Architecture
 - **All-pass filter**: First-order, `y = coeff * (x − z1) + z1` with per-stage state.
 - **Coefficient**: `tan(π * frequency / sampleRate)` mapped through `(1 − c) / (1 + c)`.
 - **Stage distribution**: SHAPE fans stage frequencies around FREQUENCY using a power-curve mapping with low-frequency compensation.
-- **Feedback**: Smoothstep-mapped (3x²−2x³) output → input loop with per-channel state.
+- **Feedback**: Sign-preserving bipolar smoothstep-mapped output → input loop with per-channel state. Positive and negative feedback produce distinct resonant characters.
 - **Smoothing**: EMA for frequency (80 ms tau), linear SmoothedValue for stages (60 ms), shape (50 ms), and feedback (50 ms).
 - **Fast path**: When all parameters are converged and no crossfade is active, a tight inner loop runs without per-sample smoothing or coefficient checks.
 - **Series crossfade**: 20 ms linear crossfade between old and new series topology on changes.
+- **Chaos**: Sample-and-hold random modulation with exponential smoothing. Per-block coefficient precomputation avoids per-sample `std::exp` calls.
 - **MIDI**: Note-to-frequency via `440 * 2^((note-69)/12)`. Velocity-dependent glide via EMA time constant.
 - **Wet filter**: Biquad HP/LP on the wet signal. Transposed Direct Form II. Coefficients updated once per block (channel 0), shared across channels.
+- **Fast dB→gain**: `std::exp2(x * 0.166)` approximation replacing `std::pow(10, x/20)` for input/output gain conversion.
 
 ### State Persistence
 - All parameters saved via JUCE AudioProcessorValueTreeState.
 - UI state (window size, palette, CRT toggle, custom colours, MIDI channel, IO section expanded/collapsed) persisted separately in the processor's state block.
+
+## Changelog
+
+### v1.4
+- Feedback is now bipolar (−100% to +100%). Negative feedback inverts the feedback polarity, producing a different resonant character (notch-to-peak inversion). Uses sign-preserving smoothstep mapping.
+- Added CHAOS engine with two independent targets: CHAOS F (filter frequency modulation) and CHAOS D (disperser frequency modulation). Sample-and-hold with exponential smoothing.
+- Added HP/LP filter section on the wet signal path with configurable frequency, slope (6/12/24 dB/oct), and per-filter enable/disable.
+- Replaced `std::pow(10, x/20)` with `std::exp2(x * 0.166)` for faster dB-to-gain conversion.
+- Precomputed chaos smooth coefficients in `prepareToPlay`, eliminating 4× `std::exp` calls per audio block.
+- Cached frequency EMA coefficient, eliminating 1× `std::exp` per block in non-MIDI path.
+- Removed duplicate chaos smoothing from outer call sites (already handled inside advance functions).
+- Checkbox rendering aligned with TR-series style (full fill when ticked).
+- All percentage parameters standardized to 1 decimal place across label, slider bar, and numeric entry prompt.

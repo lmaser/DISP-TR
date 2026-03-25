@@ -34,6 +34,14 @@ public:
 	static constexpr const char* kParamFilterHpOn    = "filter_hp_on";
 	static constexpr const char* kParamFilterLpOn    = "filter_lp_on";
 
+	// Chaos
+	static constexpr const char* kParamChaos         = "chaos";
+	static constexpr const char* kParamChaosD        = "chaos_d";
+	static constexpr const char* kParamChaosAmt      = "chaos_amt";
+	static constexpr const char* kParamChaosSpd      = "chaos_spd";
+	static constexpr const char* kParamChaosAmtFilter = "chaos_amt_filter";
+	static constexpr const char* kParamChaosSpdFilter = "chaos_spd_filter";
+
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -53,7 +61,7 @@ public:
 
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
-	static constexpr float kFeedbackMin     = 0.0f;
+	static constexpr float kFeedbackMin     = -1.0f;
 	static constexpr float kFeedbackMax     = 1.0f;
 	static constexpr float kFeedbackDefault = 0.0f;
 	static constexpr float kModMin     = 0.0f;
@@ -82,6 +90,14 @@ public:
 	static constexpr int   kFilterSlopeMin     = 0;       // 6 dB/oct
 	static constexpr int   kFilterSlopeMax     = 2;       // 24 dB/oct
 	static constexpr int   kFilterSlopeDefault = 1;       // 12 dB/oct
+
+	// Chaos ranges
+	static constexpr float kChaosAmtMin     = 0.0f;
+	static constexpr float kChaosAmtMax     = 100.0f;
+	static constexpr float kChaosAmtDefault = 50.0f;
+	static constexpr float kChaosSpdMin     = 0.01f;
+	static constexpr float kChaosSpdMax     = 100.0f;
+	static constexpr float kChaosSpdDefault = 5.0f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -170,6 +186,7 @@ private:
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> stagesSmoothed;
 	float smoothedFreqValue = 1000.0f;
 	float freqEmaCoeff = 0.0f;
+	float freqEmaCoeffDefault_ = 0.0f;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> shapeSmoothed;
 	static constexpr double kStageSmoothingSeconds = 0.06;
 	static constexpr float kFreqTauDefault   = 0.08f;
@@ -259,6 +276,12 @@ private:
 	std::atomic<float>* filterLpSlopeParam = nullptr;
 	std::atomic<float>* filterHpOnParam    = nullptr;
 	std::atomic<float>* filterLpOnParam    = nullptr;
+	std::atomic<float>* chaosParam         = nullptr;
+	std::atomic<float>* chaosDelayParam    = nullptr;
+	std::atomic<float>* chaosAmtParam      = nullptr;
+	std::atomic<float>* chaosSpdParam      = nullptr;
+	std::atomic<float>* chaosAmtFilterParam = nullptr;
+	std::atomic<float>* chaosSpdFilterParam = nullptr;
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;
@@ -275,6 +298,94 @@ private:
 		std::atomic<juce::uint32> { juce::Colours::white.getARGB() },
 		std::atomic<juce::uint32> { juce::Colours::black.getARGB() }
 	};
+
+	// ── Chaos state ──
+	bool  chaosFilterEnabled_ = false;
+	bool  chaosDelayEnabled_  = false;
+
+	// CHS D parameters (disperser frequency modulation + gain)
+	float chaosAmtD_                    = 0.0f;
+	float chaosShPeriodD_               = 8820.0f;
+	float smoothedChaosShPeriodD_       = 8820.0f;
+	float chaosFreqMaxOct_              = 0.0f;
+	float smoothedChaosFreqMaxOct_      = 0.0f;
+	float chaosGainMaxDb_               = 0.0f;
+	float smoothedChaosGainMaxDb_       = 0.0f;
+
+	// CHS D S&H: freq
+	float chaosDPhase_       = 0.0f;
+	float chaosDTarget_      = 0.0f;
+	float chaosDSmoothed_    = 0.0f;
+	float chaosDSmoothCoeff_ = 0.999f;
+	juce::Random chaosDRng_;
+
+	// CHS D S&H: gain (decorrelated)
+	float chaosGPhase_       = 0.0f;
+	float chaosGTarget_      = 0.0f;
+	float chaosGSmoothed_    = 0.0f;
+	float chaosGSmoothCoeff_ = 0.999f;
+	juce::Random chaosGRng_;
+
+	// CHS F parameters (filter cutoff modulation)
+	float chaosAmtF_                  = 0.0f;
+	float chaosShPeriodF_             = 8820.0f;
+	float smoothedChaosShPeriodF_     = 8820.0f;
+	float chaosFilterMaxOct_          = 0.0f;
+	float smoothedChaosFilterMaxOct_  = 0.0f;
+
+	// CHS F S&H: filter
+	float chaosFPhase_       = 0.0f;
+	float chaosFTarget_      = 0.0f;
+	float chaosFSmoothed_    = 0.0f;
+	float chaosFSmoothCoeff_ = 0.999f;
+	juce::Random chaosFRng_;
+
+	// Chaos per-sample param smoothing (precomputed in prepareToPlay)
+	float chaosParamSmoothCoeff_ = 0.999f;
+	float cachedChaosDSmoothCoeff_ = 0.999f;
+	float cachedChaosGSmoothCoeff_ = 0.999f;
+	float cachedChaosFSmoothCoeff_ = 0.999f;
+	float cachedChaosParamSmoothCoeff_ = 0.999f;
+
+	inline void advanceChaosD() noexcept
+	{
+		smoothedChaosFreqMaxOct_ += (chaosFreqMaxOct_ - smoothedChaosFreqMaxOct_) * (1.0f - chaosParamSmoothCoeff_);
+		smoothedChaosGainMaxDb_  += (chaosGainMaxDb_  - smoothedChaosGainMaxDb_)  * (1.0f - chaosParamSmoothCoeff_);
+		smoothedChaosShPeriodD_  += (chaosShPeriodD_  - smoothedChaosShPeriodD_)  * (1.0f - chaosParamSmoothCoeff_);
+
+		chaosDPhase_ += 1.0f;
+		if (chaosDPhase_ >= smoothedChaosShPeriodD_)
+		{
+			chaosDPhase_ -= smoothedChaosShPeriodD_;
+			chaosDTarget_ = chaosDRng_.nextFloat() * 2.0f - 1.0f;
+		}
+		chaosDSmoothed_ = chaosDSmoothCoeff_ * chaosDSmoothed_
+		                + (1.0f - chaosDSmoothCoeff_) * chaosDTarget_;
+
+		chaosGPhase_ += 1.0f;
+		if (chaosGPhase_ >= smoothedChaosShPeriodD_)
+		{
+			chaosGPhase_ -= smoothedChaosShPeriodD_;
+			chaosGTarget_ = chaosGRng_.nextFloat() * 2.0f - 1.0f;
+		}
+		chaosGSmoothed_ = chaosGSmoothCoeff_ * chaosGSmoothed_
+		                + (1.0f - chaosGSmoothCoeff_) * chaosGTarget_;
+	}
+
+	inline void advanceChaosF() noexcept
+	{
+		smoothedChaosFilterMaxOct_ += (chaosFilterMaxOct_ - smoothedChaosFilterMaxOct_) * (1.0f - chaosParamSmoothCoeff_);
+		smoothedChaosShPeriodF_    += (chaosShPeriodF_    - smoothedChaosShPeriodF_)    * (1.0f - chaosParamSmoothCoeff_);
+
+		chaosFPhase_ += 1.0f;
+		if (chaosFPhase_ >= smoothedChaosShPeriodF_)
+		{
+			chaosFPhase_ -= smoothedChaosShPeriodF_;
+			chaosFTarget_ = chaosFRng_.nextFloat() * 2.0f - 1.0f;
+		}
+		chaosFSmoothed_ = chaosFSmoothCoeff_ * chaosFSmoothed_
+		                + (1.0f - chaosFSmoothCoeff_) * chaosFTarget_;
+	}
 
 	DspDebugLog dspLog;
 

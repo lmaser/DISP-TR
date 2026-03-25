@@ -36,7 +36,7 @@ namespace
 	inline float fastDecibelsToGain (float dB) noexcept
 	{
 		if (dB <= -100.0f) return 0.0f;
-		return std::pow (10.0f, dB * 0.05f);
+		return std::exp2 (dB * 0.16609640474f);   // log2(10)/20
 	}
 
 	// ── Biquad coefficient calculators for wet HP/LP filters ──
@@ -140,6 +140,12 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	filterLpSlopeParam = apvts.getRawParameterValue (kParamFilterLpSlope);
 	filterHpOnParam    = apvts.getRawParameterValue (kParamFilterHpOn);
 	filterLpOnParam    = apvts.getRawParameterValue (kParamFilterLpOn);
+	chaosParam         = apvts.getRawParameterValue (kParamChaos);
+	chaosDelayParam    = apvts.getRawParameterValue (kParamChaosD);
+	chaosAmtParam      = apvts.getRawParameterValue (kParamChaosAmt);
+	chaosSpdParam      = apvts.getRawParameterValue (kParamChaosSpd);
+	chaosAmtFilterParam = apvts.getRawParameterValue (kParamChaosAmtFilter);
+	chaosSpdFilterParam = apvts.getRawParameterValue (kParamChaosSpdFilter);
 }
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
@@ -206,11 +212,12 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	stagesSmoothed.reset (currentSampleRate, kStageSmoothingSeconds);
 	stagesSmoothed.setCurrentAndTargetValue ((float) stages);
 	smoothedFreqValue = freq;
-	freqEmaCoeff = std::exp (-1.0f / ((float) currentSampleRate * kFreqTauDefault));
+	freqEmaCoeffDefault_ = std::exp (-1.0f / ((float) currentSampleRate * kFreqTauDefault));
+	freqEmaCoeff = freqEmaCoeffDefault_;
 	shapeSmoothed.reset (currentSampleRate, kShapeSmoothingSeconds);
 	shapeSmoothed.setCurrentAndTargetValue (shape);
 	feedbackSmoothed.reset (currentSampleRate, kFeedbackSmoothingSeconds);
-	feedbackSmoothed.setCurrentAndTargetValue (juce::jlimit (0.0f, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault)));
+	feedbackSmoothed.setCurrentAndTargetValue (juce::jlimit (kFeedbackMin, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault)));
 	feedbackLastL = 0.0f;
 	feedbackLastR = 0.0f;
 
@@ -241,6 +248,24 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCalcLpSlope_ = -1;
 	filterCoeffCountdown_ = 0;
 	updateFilterCoeffs (true, true);
+
+	// Reset chaos state
+	chaosFilterEnabled_ = false;
+	chaosDelayEnabled_  = false;
+	chaosAmtD_ = 0.0f; chaosAmtF_ = 0.0f;
+	chaosDPhase_ = 0.0f; chaosDTarget_ = 0.0f; chaosDSmoothed_ = 0.0f;
+	chaosGPhase_ = 0.0f; chaosGTarget_ = 0.0f; chaosGSmoothed_ = 0.0f;
+	chaosFPhase_ = 0.0f; chaosFTarget_ = 0.0f; chaosFSmoothed_ = 0.0f;
+	smoothedChaosFreqMaxOct_ = 0.0f;
+	smoothedChaosGainMaxDb_ = 0.0f;
+	smoothedChaosFilterMaxOct_ = 0.0f;
+	chaosParamSmoothCoeff_ = 0.999f;
+
+	// Precompute chaos smooth coefficients (sampleRate-dependent but constant between prepareToPlay)
+	cachedChaosDSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.030f));
+	cachedChaosGSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.015f));
+	cachedChaosFSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.060f));
+	cachedChaosParamSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.010f));
 
 	dspLog.enableDesktopAutoDump();
 }
@@ -493,9 +518,11 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		: (1.0f + (modValue - 0.5f) * 6.0f);
 	targetFreq *= freqMultiplier;
 
-	// ── Smoothstep feedback mapping (3x²−2x³) ───────────────
-	float rawFeedback = juce::jlimit (0.0f, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault));
-	const float targetFeedback = rawFeedback * rawFeedback * (3.0f - 2.0f * rawFeedback);
+	// ── Smoothstep feedback mapping (sign-preserving bipolar) ─
+	float rawFeedback = juce::jlimit (kFeedbackMin, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault));
+	const float sign = rawFeedback < 0.0f ? -1.0f : 1.0f;
+	const float af   = std::abs (rawFeedback);
+	const float targetFeedback = sign * af * af * (3.0f - 2.0f * af);
 
 	stagesSmoothed.setTargetValue ((float) targetStages);
 	shapeSmoothed.setTargetValue (targetShape);
@@ -534,7 +561,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	}
 	else
 	{
-		freqEmaCoeff = std::exp (-1.0f / ((float) currentSampleRate * kFreqTauDefault));
+		freqEmaCoeff = freqEmaCoeffDefault_;
 	}
 
 	// ── Direct mode (per-sample all-pass) ────────────────────
@@ -566,15 +593,66 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const bool dualCoeffR   = (style == 3);  // DUAL: separate R coefficients
 	const bool crossfading = (seriesXfadeSamplesRemaining > 0);
 
+	// ── Chaos per-block parameter read ──
+	chaosFilterEnabled_ = loadBoolParamOrDefault (chaosParam, false);
+	chaosDelayEnabled_  = loadBoolParamOrDefault (chaosDelayParam, false);
+	const bool anyChaos = chaosFilterEnabled_ || chaosDelayEnabled_;
+	if (anyChaos)
+	{
+		if (chaosDelayEnabled_)
+		{
+			const float rawAmtD = loadAtomicOrDefault (chaosAmtParam, kChaosAmtDefault);
+			const float rawSpdD = loadAtomicOrDefault (chaosSpdParam, kChaosSpdDefault);
+			chaosAmtD_       = rawAmtD;
+			chaosShPeriodD_  = (float) currentSampleRate / rawSpdD;
+			const float amtNormD = rawAmtD * 0.01f;
+			chaosFreqMaxOct_ = amtNormD * 2.0f;   // ±2 oct at 100%
+			chaosGainMaxDb_  = amtNormD * 1.0f;    // ±1 dB at 100%
+			chaosDSmoothCoeff_ = cachedChaosDSmoothCoeff_;
+			chaosGSmoothCoeff_ = cachedChaosGSmoothCoeff_;
+		}
+		else
+		{
+			chaosFreqMaxOct_ = 0.0f;
+			chaosGainMaxDb_ = 0.0f;
+		}
+
+		if (chaosFilterEnabled_)
+		{
+			const float rawAmtF = loadAtomicOrDefault (chaosAmtFilterParam, kChaosAmtDefault);
+			const float rawSpdF = loadAtomicOrDefault (chaosSpdFilterParam, kChaosSpdDefault);
+			chaosAmtF_       = rawAmtF;
+			chaosShPeriodF_  = (float) currentSampleRate / rawSpdF;
+			const float amtNormF = rawAmtF * 0.01f;
+			chaosFilterMaxOct_ = amtNormF * 2.0f;  // ±2 oct at 100%
+			chaosFSmoothCoeff_ = cachedChaosFSmoothCoeff_;
+		}
+		else
+		{
+			chaosFilterMaxOct_ = 0.0f;
+		}
+
+		chaosParamSmoothCoeff_ = cachedChaosParamSmoothCoeff_;
+	}
+	else
+	{
+		chaosAmtD_ = 0.0f; chaosAmtF_ = 0.0f;
+		chaosFreqMaxOct_ = 0.0f;
+		chaosGainMaxDb_ = 0.0f;
+		chaosFilterMaxOct_ = 0.0f;
+	}
+
 	const bool freqConverged = std::abs (smoothedFreqValue - targetFreq) < 0.01f;
 
 	// Fast path: parameters converged + no crossfade → tight inner loop
 	// without per-sample smoothing, coefficient checks, or fractional stages.
+	// Chaos D forces slow path because it needs per-sample coefficient modulation.
 	if (!crossfading
 		&& !stagesSmoothed.isSmoothing()
 		&& freqConverged
 		&& !shapeSmoothed.isSmoothing()
-		&& !feedbackSmoothed.isSmoothing())
+		&& !feedbackSmoothed.isSmoothing()
+		&& !chaosDelayEnabled_)
 	{
 		smoothedFreqValue = targetFreq;   // snap EMA to avoid drift
 		const int stgs = activeStages;
@@ -643,9 +721,20 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	{
 		const float smoothedStages = juce::jlimit (0.0f, (float) kAmountMax, stagesSmoothed.getNextValue());
 		smoothedFreqValue += (targetFreq - smoothedFreqValue) * (1.0f - freqEmaCoeff);
-		const float smoothedFreq = smoothedFreqValue;
+		float smoothedFreq = smoothedFreqValue;
 		const float smoothedShape = shapeSmoothed.getNextValue();
 		const float fb = feedbackSmoothed.getNextValue();
+
+		// Chaos D: advance S&H and modulate allpass centre frequency
+		if (chaosDelayEnabled_)
+		{
+			advanceChaosD();
+			if (chaosAmtD_ > 0.01f)
+			{
+				const float oct = chaosDSmoothed_ * smoothedChaosFreqMaxOct_;
+				smoothedFreq = juce::jlimit (20.0f, 20000.0f, smoothedFreq * std::exp2 (oct));
+			}
+		}
 
 		const int baseStages = juce::jlimit (0, kAmountMax, (int) std::floor (smoothedStages));
 		const float stageFrac = juce::jlimit (0.0f, 1.0f, smoothedStages - (float) baseStages);
@@ -806,6 +895,16 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				feedbackLastR = processR ? xR : xL;
 			}
 		}
+
+		// Chaos D gain modulation (applied per-sample after allpass)
+		if (chaosDelayEnabled_ && chaosAmtD_ > 0.01f)
+		{
+			const float gainDb  = chaosGSmoothed_ * smoothedChaosGainMaxDb_;
+			const float gainLin = std::exp2 (gainDb * 0.16609640474f);  // log2(10)/20
+			ch0[n] *= gainLin;
+			if (hasStereo)
+				ch1[n] *= gainLin;
+		}
 	}
 	} // end else (slow path)
 
@@ -846,11 +945,30 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 						smoothedFilterLpFreq_ = smoothedFilterLpFreq_ * kGainSmoothCoeff
 							+ targetLpFreq * (1.0f - kGainSmoothCoeff);
 
+						if (chaosFilterEnabled_) advanceChaosF();
+
 						--filterCoeffCountdown_;
 						if (filterCoeffCountdown_ <= 0)
 						{
 							filterCoeffCountdown_ = kFilterCoeffUpdateInterval;
-							updateFilterCoeffs (false, false);
+							if (chaosFilterEnabled_ && chaosAmtF_ > 0.01f)
+							{
+								const float oct = chaosFSmoothed_ * smoothedChaosFilterMaxOct_;
+								const float mult = std::exp2 (oct);
+								const float sHp = smoothedFilterHpFreq_;
+								const float sLp = smoothedFilterLpFreq_;
+								smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
+									(hpOn ? sHp : kFilterFreqMin) * mult);
+								smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
+									(lpOn ? sLp : kFilterFreqMax) * mult);
+								updateFilterCoeffs (true, true);
+								smoothedFilterHpFreq_ = sHp;
+								smoothedFilterLpFreq_ = sLp;
+							}
+							else
+							{
+								updateFilterCoeffs (false, false);
+							}
 						}
 					}
 
@@ -866,6 +984,14 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 					wet[n] = x;
 				}
+			}
+		}
+		else if (chaosFilterEnabled_)
+		{
+			// Filters off but chaos F enabled: advance S&H to keep phase continuous
+			for (int n = 0; n < numSamples; ++n)
+			{
+				advanceChaosF();
 			}
 		}
 	}
@@ -910,6 +1036,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		if (std::abs (smoothedMix        - mixValue)   < kSnapEpsilon) smoothedMix        = mixValue;
 	}
 
+	// ── Safety limiter (+48 dBFS ≈ 251.19) ──
+	for (int ch = 0; ch < numChannels; ++ch)
+	{
+		float* data = buffer.getWritePointer (ch);
+		juce::FloatVectorOperations::clip (data, data, -251.19f, 251.19f, numSamples);
+	}
+
 	DSP_LOG_BLOCK_END(dspLog, numSamples, currentSampleRate,
 		targetStages, targetSeries, targetFreq, targetShape, invEnabled);
 }
@@ -942,7 +1075,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamFeedback, "Feedback",
-		juce::NormalisableRange<float> (0.0f, kFeedbackMax, 0.0f, 1.0f), kFeedbackDefault));
+		juce::NormalisableRange<float> (kFeedbackMin, kFeedbackMax, 0.0f, 1.0f), kFeedbackDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamMod, "Mod",
@@ -986,6 +1119,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamFilterHpOn, "Filter HP On", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamFilterLpOn, "Filter LP On", false));
+
+	// Chaos
+	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamChaos, "Chaos Filter", false));
+	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamChaosD, "Chaos Disperser", false));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamChaosAmt, "Chaos Amount",
+		juce::NormalisableRange<float> (kChaosAmtMin, kChaosAmtMax, 0.1f), kChaosAmtDefault));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamChaosSpd, "Chaos Speed",
+		juce::NormalisableRange<float> (kChaosSpdMin, kChaosSpdMax, 0.01f, 0.3f), kChaosSpdDefault));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamChaosAmtFilter, "Chaos Amt Filter",
+		juce::NormalisableRange<float> (kChaosAmtMin, kChaosAmtMax, 0.1f), kChaosAmtDefault));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamChaosSpdFilter, "Chaos Spd Filter",
+		juce::NormalisableRange<float> (kChaosSpdMin, kChaosSpdMax, 0.01f, 0.3f), kChaosSpdDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS0, "S0", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS100, "S100", false));
