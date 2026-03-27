@@ -113,6 +113,7 @@ private:
     BarSlider modSlider;
     BarSlider inputSlider;
     BarSlider outputSlider;
+    BarSlider tiltSlider;
     BarSlider mixSlider;
 
     using DISPScheme = TR::TRScheme;
@@ -188,6 +189,7 @@ private:
     std::unique_ptr<SliderAttachment> modAttachment;
     std::unique_ptr<SliderAttachment> inputAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
+    std::unique_ptr<SliderAttachment> tiltAttachment;
     std::unique_ptr<SliderAttachment> mixAttachment;
 
     std::unique_ptr<ButtonAttachment> invAttachment;
@@ -329,6 +331,9 @@ private:
     juce::String getMixText() const;
     juce::String getMixTextShort() const;
 
+    juce::String getTiltText() const;
+    juce::String getTiltTextShort() const;
+
     juce::String getInputText() const;
     juce::String getInputTextShort() const;
 
@@ -389,6 +394,9 @@ private:
     juce::String cachedMixTextFull;
     juce::String cachedMixTextShort;
     juce::String cachedMixIntOnly;
+    juce::String cachedTiltTextFull;
+    juce::String cachedTiltTextShort;
+    juce::String cachedTiltIntOnly;
     juce::String cachedInputTextFull;
     juce::String cachedInputTextShort;
     juce::String cachedInputIntOnly;
@@ -402,7 +410,7 @@ private:
 
     HorizontalLayoutMetrics cachedHLayout_;
     VerticalLayoutMetrics cachedVLayout_;
-    std::array<juce::Rectangle<int>, 10> cachedValueAreas_;
+    std::array<juce::Rectangle<int>, 11> cachedValueAreas_;
     juce::Rectangle<int> cachedFilterValueArea_;
 
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
@@ -412,6 +420,7 @@ private:
     static constexpr double kDefaultFeedback = (double) DisperserAudioProcessor::kFeedbackDefault;
     static constexpr double kDefaultMod      = (double) DisperserAudioProcessor::kModDefault;
     static constexpr double kDefaultMix      = (double) DisperserAudioProcessor::kMixDefault;
+    static constexpr double kDefaultTilt     = (double) DisperserAudioProcessor::kTiltDefault;
     static constexpr double kDefaultStyle    = (double) DisperserAudioProcessor::kStyleDefault;
     static constexpr double kDefaultInput    = (double) DisperserAudioProcessor::kInputDefault;
     static constexpr double kDefaultOutput   = (double) DisperserAudioProcessor::kOutputDefault;

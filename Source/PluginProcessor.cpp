@@ -120,6 +120,7 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	feedbackParam = apvts.getRawParameterValue (kParamFeedback);
 	modParam = apvts.getRawParameterValue (kParamMod);
 	mixParam = apvts.getRawParameterValue (kParamMix);
+	tiltParam = apvts.getRawParameterValue (kParamTilt);
 	styleParam = apvts.getRawParameterValue (kParamStyle);
 	midiParam = apvts.getRawParameterValue (kParamMidi);
 	s0Param = apvts.getRawParameterValue (kParamS0);
@@ -225,6 +226,14 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	smoothedInputGain = 1.0f;
 	smoothedOutputGain = 1.0f;
 	smoothedMix = 1.0f;
+
+	// Reset tilt state
+	tiltDb_ = 0.0f;
+	tiltB0_ = 1.0f; tiltB1_ = 0.0f; tiltA1_ = 0.0f;
+	tiltTargetB0_ = 1.0f; tiltTargetB1_ = 0.0f; tiltTargetA1_ = 0.0f;
+	tiltState_[0] = tiltState_[1] = 0.0f;
+	lastTiltDb_ = 0.0f;
+	tiltSmoothSc_ = 1.0f - std::exp (-1.0f / (static_cast<float> (currentSampleRate) * 0.03f));
 
 	// Pre-allocate dry buffer (avoids malloc in processBlock)
 	dryBuffer.setSize (getTotalNumOutputChannels(), samplesPerBlock);
@@ -530,6 +539,9 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	// ── MIX (dry/wet) ───────────────────────────────────────
 	const float mixValue = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (mixParam, kMixDefault));
+
+	// ── TILT EQ parameter load ──
+	tiltDb_ = loadAtomicOrDefault (tiltParam, kTiltDefault);
 
 	// ── INPUT / OUTPUT gain (dB → linear, same as ECHO-TR) ───
 	const float inputGainDb  = juce::jlimit (kInputMin,  kInputMax,  loadAtomicOrDefault (inputParam,  kInputDefault));
@@ -996,6 +1008,51 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		}
 	}
 
+	// ── TILT filter (1-pole shelving, pivot 1 kHz) ──
+	if (std::abs (tiltDb_) > 0.05f)
+	{
+		if (std::abs (tiltDb_ - lastTiltDb_) > 0.02f)
+		{
+			lastTiltDb_ = tiltDb_;
+			const double pivot = 1000.0;
+			const double octToNy = std::log2 ((currentSampleRate * 0.5) / pivot);
+			const double gainNyDb = static_cast<double> (tiltDb_) * octToNy;
+			const double gNy = std::pow (10.0, gainNyDb / 20.0);
+			const double wc = 2.0 * currentSampleRate
+			                * std::tan (juce::MathConstants<double>::pi * pivot / currentSampleRate);
+			const double K = wc / (2.0 * currentSampleRate);
+			const double g = std::sqrt (gNy);
+			const double norm = 1.0 / (1.0 + K * g);
+			tiltTargetB0_ = static_cast<float> ((g + K) * norm);
+			tiltTargetB1_ = static_cast<float> ((K - g) * norm);
+			tiltTargetA1_ = static_cast<float> ((K * g - 1.0) * norm);
+		}
+
+		const float sc = tiltSmoothSc_;
+		tiltB0_ += (tiltTargetB0_ - tiltB0_) * sc;
+		tiltB1_ += (tiltTargetB1_ - tiltB1_) * sc;
+		tiltA1_ += (tiltTargetA1_ - tiltA1_) * sc;
+
+		for (int ch = 0; ch < juce::jmin (numChannels, 2); ++ch)
+		{
+			float* data = buffer.getWritePointer (ch);
+			for (int n = 0; n < numSamples; ++n)
+			{
+				const float x = data[n];
+				const float y = tiltB0_ * x + tiltState_[ch];
+				tiltState_[ch] = tiltB1_ * x - tiltA1_ * y;
+				data[n] = y;
+			}
+		}
+	}
+	else if (std::abs (lastTiltDb_) > 0.05f)
+	{
+		lastTiltDb_ = 0.0f;
+		tiltB0_ = 1.0f; tiltB1_ = 0.0f; tiltA1_ = 0.0f;
+		tiltTargetB0_ = 1.0f; tiltTargetB1_ = 0.0f; tiltTargetA1_ = 0.0f;
+		tiltState_[0] = tiltState_[1] = 0.0f;
+	}
+
 	// ── Per-sample smoothed Input/Output/Mix + Dry/Wet blend (fused loop) ──
 	if (needsDryBlend)
 	{
@@ -1084,6 +1141,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamMix, "Mix",
 		juce::NormalisableRange<float> (0.0f, kMixMax, 0.0f, 1.0f), kMixDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamTilt, "Tilt",
+		juce::NormalisableRange<float> (kTiltMin, kTiltMax, 0.01f), kTiltDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamInput, "Input",

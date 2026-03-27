@@ -22,6 +22,7 @@ public:
 	static constexpr const char* kParamInput     = "input";
 	static constexpr const char* kParamOutput    = "output";
 	static constexpr const char* kParamMix       = "mix";
+	static constexpr const char* kParamTilt      = "tilt";
 	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
 	static constexpr const char* kParamS0        = "s0";
@@ -78,6 +79,10 @@ public:
 	static constexpr float kMixMin     = 0.0f;
 	static constexpr float kMixMax     = 1.0f;
 	static constexpr float kMixDefault = 1.0f;
+
+	static constexpr float kTiltMin     = -6.0f;
+	static constexpr float kTiltMax     =  6.0f;
+	static constexpr float kTiltDefault =  0.0f;
 
 	static constexpr int kStyleMin     = 0;
 	static constexpr int kStyleMax     = 3;         // 0 = MONO, 1 = STEREO, 2 = WIDE, 3 = DUAL
@@ -228,6 +233,14 @@ private:
 	float smoothedOutputGain = 1.0f;
 	float smoothedMix = 1.0f;
 
+	// ── Tilt EQ (1-pole shelving, pivot 1 kHz) ──
+	float tiltDb_        = 0.0f;
+	float tiltB0_ = 1.0f, tiltB1_ = 0.0f, tiltA1_ = 0.0f;
+	float tiltTargetB0_ = 1.0f, tiltTargetB1_ = 0.0f, tiltTargetA1_ = 0.0f;
+	float tiltState_[2]  = { 0.0f, 0.0f };
+	float lastTiltDb_    = 0.0f;
+	float tiltSmoothSc_  = 0.0f;
+
 	// Pre-allocated dry buffer for mix blend (avoids malloc in processBlock)
 	juce::AudioBuffer<float> dryBuffer;
 
@@ -266,6 +279,7 @@ private:
 	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* modParam = nullptr;
 	std::atomic<float>* mixParam = nullptr;
+	std::atomic<float>* tiltParam = nullptr;
 	std::atomic<float>* styleParam = nullptr;
 	std::atomic<float>* midiParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
