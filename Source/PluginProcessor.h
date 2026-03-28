@@ -44,6 +44,10 @@ public:
 	static constexpr const char* kParamChaosAmtFilter = "chaos_amt_filter";
 	static constexpr const char* kParamChaosSpdFilter = "chaos_spd_filter";
 
+	static constexpr const char* kParamModeIn   = "mode_in";
+	static constexpr const char* kParamModeOut  = "mode_out";
+	static constexpr const char* kParamSumBus   = "sum_bus";
+
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -108,6 +112,10 @@ public:
 	static constexpr float kChaosSpdMin     = 0.01f;
 	static constexpr float kChaosSpdMax     = 100.0f;
 	static constexpr float kChaosSpdDefault = 5.0f;
+
+	static constexpr int   kModeInOutDefault = 0;
+	static constexpr int   kSumBusDefault    = 0;
+	static constexpr float kSqrt2Over2       = 0.707106781f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
 	void releaseResources() override;
@@ -301,6 +309,10 @@ private:
 	std::atomic<float>* chaosSpdParam      = nullptr;
 	std::atomic<float>* chaosAmtFilterParam = nullptr;
 	std::atomic<float>* chaosSpdFilterParam = nullptr;
+
+	std::atomic<float>* modeInParam   = nullptr;
+	std::atomic<float>* modeOutParam  = nullptr;
+	std::atomic<float>* sumBusParam   = nullptr;
 
 	std::atomic<float>* panParam       = nullptr;
 	float lastPan_      = -1.0f;

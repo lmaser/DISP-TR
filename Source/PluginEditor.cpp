@@ -194,6 +194,32 @@ void DisperserAudioProcessorEditor::MinimalLNF::drawScrollbar (juce::Graphics& g
     }
 }
 
+void DisperserAudioProcessorEditor::MinimalLNF::drawComboBox (
+    juce::Graphics& g, int width, int height,
+    bool /*isButtonDown*/, int /*buttonX*/, int /*buttonY*/,
+    int /*buttonW*/, int /*buttonH*/, juce::ComboBox& /*box*/)
+{
+    const juce::Rectangle<int> r (0, 0, width, height);
+    g.setColour (scheme.bg);
+    g.fillRect (r);
+    g.setColour (scheme.outline);
+    g.drawRect (r, 3);
+}
+
+void DisperserAudioProcessorEditor::MinimalLNF::drawPopupMenuBackground (
+    juce::Graphics& g, int width, int height)
+{
+    g.fillAll (scheme.bg);
+    g.setColour (scheme.outline);
+    g.drawRect (0, 0, width, height, 2);
+}
+
+juce::Font DisperserAudioProcessorEditor::MinimalLNF::getComboBoxFont (juce::ComboBox& box)
+{
+    const float h = juce::jlimit (10.0f, 18.0f, box.getHeight() * 0.55f);
+    return juce::Font (juce::FontOptions (h).withStyle ("Bold"));
+}
+
 void DisperserAudioProcessorEditor::MinimalLNF::drawButtonBackground (juce::Graphics& g,
                                                                       juce::Button& button,
                                                                       const juce::Colour& backgroundColour,
@@ -664,6 +690,30 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         chaosDelayDisplay.setVisible (false);
     }
 
+    // Mode In / Mode Out / Sum Bus combos
+    {
+        auto setupModeCombo = [this] (juce::ComboBox& combo)
+        {
+            addAndMakeVisible (combo);
+            combo.addItem ("L+R",  1);
+            combo.addItem ("MID",  2);
+            combo.addItem ("SIDE", 3);
+            combo.setJustificationType (juce::Justification::centred);
+            combo.setLookAndFeel (&lnf);
+            combo.setVisible (false);
+        };
+        setupModeCombo (modeInCombo);
+        setupModeCombo (modeOutCombo);
+
+        addAndMakeVisible (sumBusCombo);
+        sumBusCombo.addItem ("ST",              1);
+        sumBusCombo.addItem (juce::String::fromUTF8 (u8"\u2192M"), 2);
+        sumBusCombo.addItem (juce::String::fromUTF8 (u8"\u2192S"), 3);
+        sumBusCombo.setJustificationType (juce::Justification::centred);
+        sumBusCombo.setLookAndFeel (&lnf);
+        sumBusCombo.setVisible (false);
+    }
+
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
                            1.0);
@@ -724,6 +774,10 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindButton (chaosFilterAttachment, DisperserAudioProcessor::kParamChaos, chaosFilterButton);
     bindButton (chaosDelayAttachment,  DisperserAudioProcessor::kParamChaosD, chaosDelayButton);
 
+    modeInAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamModeIn,  modeInCombo);
+    modeOutAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamModeOut, modeOutCombo);
+    sumBusAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamSumBus,  sumBusCombo);
+
     for (auto* paramId : kUiMirrorParamIds)
         audioProcessor.apvts.addParameterListener (paramId, this);
 
@@ -776,6 +830,10 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
 
     if (tooltipWindow != nullptr)
         tooltipWindow->setLookAndFeel (nullptr);
+
+    modeInCombo.setLookAndFeel (nullptr);
+    modeOutCombo.setLookAndFeel (nullptr);
+    sumBusCombo.setLookAndFeel (nullptr);
 
     setLookAndFeel (nullptr);
 }
@@ -3029,14 +3087,14 @@ void DisperserAudioProcessorEditor::openChaosFilterPrompt()
 {
     openChaosConfigPrompt (DisperserAudioProcessor::kParamChaosAmtFilter,
                            DisperserAudioProcessor::kParamChaosSpdFilter,
-                           "CHS F");
+                           "CHSF");
 }
 
 void DisperserAudioProcessorEditor::openChaosDelayPrompt()
 {
     openChaosConfigPrompt (DisperserAudioProcessor::kParamChaosAmt,
                            DisperserAudioProcessor::kParamChaosSpd,
-                           "CHS D");
+                           "CHSD");
 }
 
 void DisperserAudioProcessorEditor::openInfoPopup()
@@ -3801,8 +3859,14 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
     m.bottomMargin = m.titleTopPad;
 
     m.box = juce::jlimit (40, kToggleBoxPx, (int) std::round (editorH * 0.085));
+    m.btnRowGap = juce::jlimit (4, 14, (int) std::round (editorH * 0.008));
     m.btnY = editorH - m.bottomMargin - m.box;
-    m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
+
+    // When IO is expanded, chaos checkboxes sit above the button row
+    m.chaosRowY = ioExpanded ? (m.btnY - m.btnRowGap - m.box) : 0;
+
+    const int sliderBottomRef = ioExpanded ? m.chaosRowY : m.btnY;
+    m.availableForSliders = juce::jmax (40, sliderBottomRef - m.betweenSlidersAndButtons - m.topMargin);
 
     // Bars below toggle: 7 IO bars when expanded (IN, OUT, TILT, FILTER, PAN, MIX + chaos row), 7 main bars when collapsed.
     // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
@@ -4138,7 +4202,7 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    // CHS F label click → toggle (left), config (right)
+    // CHSF label click → toggle (left), config (right)
     if (chaosFilterButton.isVisible())
     {
         const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
@@ -4157,7 +4221,7 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
         }
     }
 
-    // CHS D label click → toggle (left), config (right)
+    // CHSD label click → toggle (left), config (right)
     if (chaosDelayButton.isVisible())
     {
         const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
@@ -4434,9 +4498,29 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         drawToggleLegend (getInvLabelArea(), chooseToggleLabel (invButton, invCR, "INVERT", "INV"), invCR);
         drawToggleLegend (getMidiLabelArea(), chooseToggleLabel (midiButton, midiCR, "MIDI", "MD"), midiCR);
 
+        // Mode In / Mode Out / Sum Bus labels above combos
+        if (modeInCombo.isVisible())
+        {
+            const auto font = juce::Font (juce::FontOptions (11.0f).withStyle ("Bold"));
+            g.setFont (font);
+            auto drawComboLabel = [&] (const juce::ComboBox& combo, const juce::String& full, const juce::String& shortTxt)
+            {
+                const auto area = combo.getBounds().withHeight (14).translated (0, -15);
+                const float comboW = (float) combo.getWidth();
+                juce::GlyphArrangement ga;
+                ga.addLineOfText (font, full, 0.0f, 0.0f);
+                const bool useShort = ga.getBoundingBox (0, -1, false).getWidth() > comboW;
+                g.drawText (useShort ? shortTxt : full, area, juce::Justification::centred);
+            };
+            drawComboLabel (modeInCombo,  "MODE IN",  "IN");
+            drawComboLabel (modeOutCombo, "MODE OUT", "OUT");
+            drawComboLabel (sumBusCombo,  "SUM BUS",  "SUM");
+        }
+
         // Chaos toggle labels (visible only when IO expanded)
         if (chaosFilterButton.isVisible())
         {
+            g.setFont (kBoldFont40());
             const int chsFCR = chaosDelayButton.isVisible()
                              ? chaosDelayButton.getX() - kToggleLegendCollisionPadPx
                              : W - kToggleLegendCollisionPadPx;
@@ -4456,8 +4540,8 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
                                 juce::Justification::left, true);
                 }
             };
-            drawChaosToggleLabel (chaosFilterButton, "CHS F", chsFCR);
-            drawChaosToggleLabel (chaosDelayButton,  "CHS D", chsDCR);
+            drawChaosToggleLabel (chaosFilterButton, "CHSF", chsFCR);
+            drawChaosToggleLabel (chaosDelayButton,  "CHSD", chsDCR);
         }
     }
     g.setColour (scheme.text);
@@ -4546,7 +4630,7 @@ void DisperserAudioProcessorEditor::resized()
 
     if (ioSectionExpanded_)
     {
-        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, CHS F | CHS D; main params hidden
+        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, MODE IN/OUT/SUM, CHSF | CHSD; main params hidden
         inputSlider.setBounds  (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
         outputSlider.setBounds (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
         tiltSlider.setBounds   (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);
@@ -4561,15 +4645,34 @@ void DisperserAudioProcessorEditor::resized()
         panSlider.setVisible (true);
         mixSlider.setVisible (true);
 
-        // Chaos buttons at row 6
-        const int chaosY = mainTop + 6 * step;
+        const int modeRowPad = 10;
+
+        // Mode In / Mode Out / Sum Bus — 3 combos on row 6
+        {
+            const int modeY = mainTop + 6 * step + modeRowPad;
+            const int comboGap = 4;
+            const int totalW = horizontalLayout.barW + horizontalLayout.valuePad + horizontalLayout.valueW;
+            const int comboW = (totalW - comboGap * 2) / 3;
+            const int comboH = juce::jmax (24, verticalLayout.barH);
+            modeInCombo.setBounds  (horizontalLayout.leftX,                           modeY, comboW, comboH);
+            modeOutCombo.setBounds (horizontalLayout.leftX + comboW + comboGap,        modeY, comboW, comboH);
+            sumBusCombo.setBounds  (horizontalLayout.leftX + (comboW + comboGap) * 2,  modeY, comboW, comboH);
+        }
+
+        // Chaos buttons at chaosRowY
+        const int chaosY = verticalLayout.chaosRowY;
+        const int chaosH = verticalLayout.box;
         const int chaosRightX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
         const int chaosLeftW  = chaosRightX - horizontalLayout.leftX;
         const int chaosRightW = horizontalLayout.leftX + horizontalLayout.contentW - chaosRightX;
-        chaosFilterButton.setBounds  (horizontalLayout.leftX, chaosY, chaosLeftW,  verticalLayout.box);
-        chaosFilterDisplay.setBounds (horizontalLayout.leftX, chaosY, chaosLeftW,  verticalLayout.box);
-        chaosDelayButton.setBounds   (chaosRightX,            chaosY, chaosRightW, verticalLayout.box);
-        chaosDelayDisplay.setBounds  (chaosRightX,            chaosY, chaosRightW, verticalLayout.box);
+        chaosFilterButton.setBounds  (horizontalLayout.leftX, chaosY, chaosLeftW,  chaosH);
+        chaosFilterDisplay.setBounds (horizontalLayout.leftX, chaosY, chaosLeftW,  chaosH);
+        chaosDelayButton.setBounds   (chaosRightX,            chaosY, chaosRightW, chaosH);
+        chaosDelayDisplay.setBounds  (chaosRightX,            chaosY, chaosRightW, chaosH);
+
+        modeInCombo.setVisible (true);
+        modeOutCombo.setVisible (true);
+        sumBusCombo.setVisible (true);
         chaosFilterButton.setVisible (true);
         chaosFilterDisplay.setVisible (true);
         chaosDelayButton.setVisible (true);
@@ -4628,6 +4731,9 @@ void DisperserAudioProcessorEditor::resized()
         chaosFilterDisplay.setVisible (false);
         chaosDelayButton.setVisible (false);
         chaosDelayDisplay.setVisible (false);
+        modeInCombo.setVisible (false);
+        modeOutCombo.setVisible (false);
+        sumBusCombo.setVisible (false);
     }
 
     const int buttonAreaX = horizontalLayout.leftX;

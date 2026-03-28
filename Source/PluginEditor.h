@@ -186,8 +186,14 @@ private:
     juce::Label chaosFilterDisplay;
     juce::Label chaosDelayDisplay;
 
+    // Mode In / Mode Out / Sum Bus
+    juce::ComboBox modeInCombo;
+    juce::ComboBox modeOutCombo;
+    juce::ComboBox sumBusCombo;
+
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     std::unique_ptr<SliderAttachment> amountAttachment;
     std::unique_ptr<SliderAttachment> seriesAttachment;
@@ -206,6 +212,10 @@ private:
     std::unique_ptr<ButtonAttachment> midiAttachment;
     std::unique_ptr<ButtonAttachment> chaosFilterAttachment;
     std::unique_ptr<ButtonAttachment> chaosDelayAttachment;
+
+    std::unique_ptr<ComboBoxAttachment> modeInAttachment;
+    std::unique_ptr<ComboBoxAttachment> modeOutAttachment;
+    std::unique_ptr<ComboBoxAttachment> sumBusAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
@@ -231,6 +241,8 @@ private:
         int betweenSlidersAndButtons = 0;
         int bottomMargin = 0;
         int box = 0;
+        int btnRowGap = 0;
+        int chaosRowY = 0;
         int btnY = 0;
         int availableForSliders = 0;
         int barH = 0;
@@ -297,6 +309,17 @@ private:
                             bool isScrollbarVertical,
                             int thumbStartPosition, int thumbSize,
                             bool isMouseOver, bool isMouseDown) override;
+
+        void drawComboBox (juce::Graphics&, int width, int height,
+                           bool isButtonDown, int buttonX, int buttonY,
+                           int buttonW, int buttonH, juce::ComboBox&) override;
+        void drawPopupMenuBackground (juce::Graphics&, int width, int height) override;
+        juce::Font getComboBoxFont (juce::ComboBox&) override;
+        void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+        {
+            label.setBounds (1, 1, box.getWidth() - 2, box.getHeight() - 2);
+            label.setJustificationType (juce::Justification::centred);
+        }
 
         int getMinimumScrollbarThumbSize (juce::ScrollBar&) override { return 16; }
         int getScrollbarButtonSize (juce::ScrollBar&) override      { return 0; }
@@ -442,9 +465,9 @@ private:
     static constexpr double kDefaultOutput   = (double) DisperserAudioProcessor::kOutputDefault;
 
     static constexpr int kMinW = 360;
-    static constexpr int kMinH = 540;
+    static constexpr int kMinH = 660;
     static constexpr int kMaxW = 800;
-    static constexpr int kMaxH = 540;
+    static constexpr int kMaxH = 760;
 
     static constexpr int kLayoutVerticalBiasPx = 10;
 

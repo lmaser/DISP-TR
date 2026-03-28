@@ -148,6 +148,9 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	chaosSpdParam      = apvts.getRawParameterValue (kParamChaosSpd);
 	chaosAmtFilterParam = apvts.getRawParameterValue (kParamChaosAmtFilter);
 	chaosSpdFilterParam = apvts.getRawParameterValue (kParamChaosSpdFilter);
+	modeInParam   = apvts.getRawParameterValue (kParamModeIn);
+	modeOutParam  = apvts.getRawParameterValue (kParamModeOut);
+	sumBusParam   = apvts.getRawParameterValue (kParamSumBus);
 }
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
@@ -600,6 +603,25 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	auto* ch0 = buffer.getWritePointer (0);
 	float* ch1 = (numChannels > 1) ? buffer.getWritePointer (1) : nullptr;
 	const bool hasStereo = (ch1 != nullptr);
+
+	// ── Mode In: M/S encode input before effect processing ──
+	const int modeInVal  = juce::jlimit (0, 2, (int) modeInParam->load());
+	const int modeOutVal = juce::jlimit (0, 2, (int) modeOutParam->load());
+	const int sumBusVal  = juce::jlimit (0, 2, (int) sumBusParam->load());
+
+	if (modeInVal > 0 && hasStereo)
+	{
+		for (int n = 0; n < numSamples; ++n)
+		{
+			const float L = ch0[n];
+			const float R = ch1[n];
+			const float M = (L + R) * kSqrt2Over2;
+			const float S = (L - R) * kSqrt2Over2;
+			if (modeInVal == 1) { ch0[n] = M; ch1[n] = M; }
+			else                { ch0[n] = S; ch1[n] = S; }
+		}
+	}
+
 	const bool processR     = (style >= 1 && hasStereo);
 	const bool crossFbk     = (style == 2);  // WIDE
 	const bool negateCoeffR = (style == 2);  // WIDE: complementary phase
@@ -1054,22 +1076,74 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		tiltState_[0] = tiltState_[1] = 0.0f;
 	}
 
+	// ── Mode Out: M/S decode wet signal ──
+	if (modeOutVal > 0 && numChannels >= 2)
+	{
+		float* wL = buffer.getWritePointer (0);
+		float* wR = buffer.getWritePointer (1);
+		for (int n = 0; n < numSamples; ++n)
+		{
+			const float L = wL[n];
+			const float R = wR[n];
+			const float M = (L + R) * kSqrt2Over2;
+			const float S = (L - R) * kSqrt2Over2;
+			if (modeOutVal == 1) { wL[n] = M; wR[n] = M; }
+			else                 { wL[n] = S; wR[n] = S; }
+		}
+	}
+
 	// ── Per-sample smoothed Input/Output/Mix + Dry/Wet blend (fused loop) ──
 	if (needsDryBlend)
 	{
-		for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
+		if (sumBusVal == 0 || numChannels < 2)
 		{
-			const float* dry = dryBuffer.getReadPointer (ch);
-			float* wet = buffer.getWritePointer (ch);
+			// ST (stereo passthrough)
+			for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
+			{
+				const float* dry = dryBuffer.getReadPointer (ch);
+				float* wet = buffer.getWritePointer (ch);
+				for (int n = 0; n < numSamples; ++n)
+				{
+					smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
+					smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
+					smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
+
+					const float dryS = dry[n];
+					const float wetS = wet[n] * smoothedInputGain * smoothedOutputGain;
+					wet[n] = dryS + smoothedMix * (wetS - dryS);
+				}
+			}
+		}
+		else
+		{
+			// →M or →S bus: dry preserves stereo image, only wet goes through bus
+			const float* dryL = dryBuffer.getReadPointer (0);
+			const float* dryR = dryBuffer.getReadPointer (1);
+			float* outL = buffer.getWritePointer (0);
+			float* outR = buffer.getWritePointer (1);
 			for (int n = 0; n < numSamples; ++n)
 			{
 				smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
 				smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
 				smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
 
-				const float dryS = dry[n];
-				const float wetS = wet[n] * smoothedInputGain * smoothedOutputGain;
-				wet[n] = dryS + smoothedMix * (wetS - dryS);
+				const float dL = dryL[n] * (1.0f - smoothedMix);
+				const float dR = dryR[n] * (1.0f - smoothedMix);
+				const float wL = outL[n] * smoothedInputGain * smoothedOutputGain * smoothedMix;
+				const float wR = outR[n] * smoothedInputGain * smoothedOutputGain * smoothedMix;
+
+				if (sumBusVal == 1) // →M
+				{
+					const float midBus = (wL + wR) * kSqrt2Over2;
+					outL[n] = dL + midBus;
+					outR[n] = dR + midBus;
+				}
+				else // →S
+				{
+					const float sideBus = (wL - wR) * kSqrt2Over2;
+					outL[n] = dL + sideBus;
+					outR[n] = dR - sideBus;
+				}
 			}
 		}
 	}
@@ -1219,6 +1293,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamChaosSpdFilter, "Chaos Spd Filter",
 		juce::NormalisableRange<float> (kChaosSpdMin, kChaosSpdMax, 0.01f, 0.3f), kChaosSpdDefault));
+
+	// Mode In / Mode Out / Sum Bus
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamModeIn, "Mode In",
+		juce::StringArray { "L+R", "MID", "SIDE" }, kModeInOutDefault));
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamModeOut, "Mode Out",
+		juce::StringArray { "L+R", "MID", "SIDE" }, kModeInOutDefault));
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamSumBus, "Sum Bus",
+		juce::StringArray { "ST", juce::String::fromUTF8 (u8"\u2192M"), juce::String::fromUTF8 (u8"\u2192S") }, kSumBusDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS0, "S0", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS100, "S100", false));
