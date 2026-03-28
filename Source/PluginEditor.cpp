@@ -553,7 +553,7 @@ void DisperserAudioProcessorEditor::FilterBarComponent::mouseDoubleClick (const 
 DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProcessor& p)
 : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    const std::array<BarSlider*, 11> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &mixSlider };
+    const std::array<BarSlider*, 12> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider };
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
     crtEnabled = audioProcessor.getUiFxTailEnabled();
@@ -613,12 +613,14 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     inputSlider.setNumDecimalPlacesToDisplay (1);
     outputSlider.setNumDecimalPlacesToDisplay (1);
     tiltSlider.setNumDecimalPlacesToDisplay (1);
+    panSlider.setNumDecimalPlacesToDisplay (1);
     mixSlider.setNumDecimalPlacesToDisplay (1);
 
     // IO sliders start hidden (collapsible section, collapsed by default)
     inputSlider.setVisible (false);
     outputSlider.setVisible (false);
     tiltSlider.setVisible (false);
+    panSlider.setVisible (false);
     mixSlider.setVisible (false);
 
     // Filter bar — hidden along with IO sliders in collapsed state
@@ -707,6 +709,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindSlider (inputAttachment, DisperserAudioProcessor::kParamInput, inputSlider, kDefaultInput);
     bindSlider (outputAttachment, DisperserAudioProcessor::kParamOutput, outputSlider, kDefaultOutput);
     bindSlider (tiltAttachment, DisperserAudioProcessor::kParamTilt, tiltSlider, kDefaultTilt);
+    bindSlider (panAttachment,  DisperserAudioProcessor::kParamPan,  panSlider,  0.5);
     bindSlider (mixAttachment, DisperserAudioProcessor::kParamMix, mixSlider, kDefaultMix);
 
     auto bindButton = [&] (std::unique_ptr<ButtonAttachment>& attachment,
@@ -767,7 +770,7 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     dismissEditorOwnedModalPrompts (lnf);
     setPromptOverlayActive (false);
 
-    const std::array<BarSlider*, 11> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &mixSlider };
+    const std::array<BarSlider*, 12> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider };
     for (auto* slider : barSliders)
         slider->removeListener (this);
 
@@ -1053,6 +1056,8 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const auto oldInputShortLen = cachedInputTextShort.length();
     const auto oldOutputFullLen = cachedOutputTextFull.length();
     const auto oldOutputShortLen = cachedOutputTextShort.length();
+    const auto oldPanFullLen = cachedPanTextFull.length();
+    const auto oldPanShortLen = cachedPanTextShort.length();
 
     cachedAmountTextFull  = juce::String (amountV) + " STAGES";
     cachedAmountTextShort = juce::String (amountV) + " STG";
@@ -1135,6 +1140,9 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedFilterTextFull  = getFilterText();
     cachedFilterTextShort = getFilterTextShort();
 
+    cachedPanTextFull  = getPanText();
+    cachedPanTextShort = getPanTextShort();
+
     const bool lengthChanged = oldAmountFullLen  != cachedAmountTextFull.length()
                             || oldAmountShortLen != cachedAmountTextShort.length()
                             || oldSeriesFullLen  != cachedSeriesTextFull.length()
@@ -1154,7 +1162,9 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
                             || oldInputFullLen   != cachedInputTextFull.length()
                             || oldInputShortLen  != cachedInputTextShort.length()
                             || oldOutputFullLen   != cachedOutputTextFull.length()
-                            || oldOutputShortLen  != cachedOutputTextShort.length();
+                            || oldOutputShortLen  != cachedOutputTextShort.length()
+                            || oldPanFullLen      != cachedPanTextFull.length()
+                            || oldPanShortLen     != cachedPanTextShort.length();
 
     return lengthChanged;
 }
@@ -1590,7 +1600,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
 
     juce::String suffix;
     juce::String suffixShort;
-    const bool isPercentPrompt = (&s == &shapeSlider || &s == &feedbackSlider || &s == &mixSlider);
+    const bool isPercentPrompt = (&s == &shapeSlider || &s == &feedbackSlider || &s == &mixSlider || &s == &panSlider);
 
     if (&s == &amountSlider)       { suffix = " STAGES";  suffixShort = " STG"; }
     else if (&s == &seriesSlider)  { suffix = " SERIES";  suffixShort = " SRS"; }
@@ -1599,6 +1609,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     else if (&s == &feedbackSlider){ suffix = " % FEEDBACK"; suffixShort = " % FBK"; }
     else if (&s == &modSlider)     { suffix = " X MOD";   suffixShort = " X"; }
     else if (&s == &mixSlider)     { suffix = " % MIX";   suffixShort = " %"; }
+    else if (&s == &panSlider)     { suffix = " % PAN";   suffixShort = " %"; }
     else if (&s == &inputSlider)   { suffix = " dB INPUT"; suffixShort = " dB"; }
     else if (&s == &outputSlider)  { suffix = " dB OUTPUT"; suffixShort = " dB"; }
 
@@ -1627,6 +1638,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         currentDisplay = juce::String (s.getValue(), 1);
     else if (&s == &outputSlider)
         currentDisplay = juce::String (s.getValue(), 1);
+    else if (&s == &panSlider)
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 0);
     else
         currentDisplay = s.getTextFromValue (s.getValue());
 
@@ -1663,6 +1676,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         else if (&s == &feedbackSlider)worstCaseText = "100.00";
         else if (&s == &mixSlider)     worstCaseText = "100.0000";
         else if (&s == &modSlider)     worstCaseText = "4.00";
+        else if (&s == &panSlider)     worstCaseText = "100";
         else if (&s == &inputSlider)   worstCaseText = "-100.0";
         else if (&s == &outputSlider)  worstCaseText = "-100.0";
         else                           worstCaseText = "999.99";
@@ -1798,6 +1812,13 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             maxDecs = 1;
             maxLen = 6;
         }
+        else if (&s == &panSlider)
+        {
+            minVal = 0.0;
+            maxVal = 100.0;
+            maxDecs = 0;
+            maxLen = 3;
+        }
 
         te->setInputFilter (new NumericInputFilter (minVal, maxVal, maxLen, maxDecs), true);
 
@@ -1925,7 +1946,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             const juce::String numericToken = t.initialSectionContainingOnly ("0123456789.,-");
             double v = numericToken.getDoubleValue();
 
-            if (safeThis != nullptr && (sliderPtr == &safeThis->shapeSlider || sliderPtr == &safeThis->feedbackSlider || sliderPtr == &safeThis->mixSlider))
+            if (safeThis != nullptr && (sliderPtr == &safeThis->shapeSlider || sliderPtr == &safeThis->feedbackSlider || sliderPtr == &safeThis->mixSlider || sliderPtr == &safeThis->panSlider))
                 v *= 0.01;
 
             // user typed multiplier for MOD; convert to slider's [0,1] range
@@ -3668,6 +3689,24 @@ juce::String DisperserAudioProcessorEditor::getTiltTextShort() const
     return juce::String (db, 1) + " dB TLT";
 }
 
+juce::String DisperserAudioProcessorEditor::getPanText() const
+{
+    const float v = (float) panSlider.getValue();
+    const int pct = juce::roundToInt ((v - 0.5f) * 200.0f);
+    if (pct == 0) return "C PAN";
+    if (pct < 0)  return "L" + juce::String (-pct) + " PAN";
+    return "R" + juce::String (pct) + " PAN";
+}
+
+juce::String DisperserAudioProcessorEditor::getPanTextShort() const
+{
+    const float v = (float) panSlider.getValue();
+    const int pct = juce::roundToInt ((v - 0.5f) * 200.0f);
+    if (pct == 0) return "C";
+    if (pct < 0)  return "L" + juce::String (-pct);
+    return "R" + juce::String (pct);
+}
+
 juce::String DisperserAudioProcessorEditor::getFilterText() const
 {
     return "FILTER";
@@ -3765,10 +3804,10 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
     m.btnY = editorH - m.bottomMargin - m.box;
     m.availableForSliders = juce::jmax (40, m.btnY - m.betweenSlidersAndButtons - m.topMargin);
 
-    // Bars below toggle: 6 IO bars when expanded (IN, OUT, TILT, FILTER, MIX + chaos row), 7 main bars when collapsed.
+    // Bars below toggle: 7 IO bars when expanded (IN, OUT, TILT, FILTER, PAN, MIX + chaos row), 7 main bars when collapsed.
     // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
-    const int numSliders = ioExpanded ? 6 : 7;
-    const int numGaps    = ioExpanded ? 6 : 7;  // (N-1) inter-slider + 1 toggle-to-first
+    const int numSliders = ioExpanded ? 7 : 7;
+    const int numGaps    = ioExpanded ? 7 : 7;  // (N-1) inter-slider + 1 toggle-to-first
 
     m.toggleBarH = 20;  // fixed visual height for click area
     const int spaceForScale = juce::jmax (40, m.availableForSliders - m.toggleBarH);
@@ -3833,6 +3872,21 @@ void DisperserAudioProcessorEditor::updateCachedLayout()
     else
     {
         cachedFilterValueArea_ = {};
+    }
+
+    // Pan slider value area
+    if (panSlider.isVisible())
+    {
+        const auto& pb = panSlider.getBounds();
+        const int valueX = pb.getRight() + cachedHLayout_.valuePad;
+        const int maxW = juce::jmax (0, getWidth() - valueX - kValueAreaRightMarginPx);
+        const int vw   = juce::jmin (cachedHLayout_.valueW, maxW);
+        const int y    = pb.getCentreY() - (kValueAreaHeightPx / 2);
+        cachedPanValueArea_ = { valueX, y, juce::jmax (0, vw), kValueAreaHeightPx };
+    }
+    else
+    {
+        cachedPanValueArea_ = {};
     }
 
     // Cache toggle bar area
@@ -4343,6 +4397,10 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         // Filter bar legend
         if (! cachedFilterValueArea_.isEmpty())
             drawLegendForMode (cachedFilterValueArea_, cachedFilterTextFull, cachedFilterTextShort, cachedFilterTextShort);
+
+        // Pan legend
+        if (! cachedPanValueArea_.isEmpty())
+            drawLegendForMode (cachedPanValueArea_, cachedPanTextFull, cachedPanTextShort, cachedPanTextShort);
     }
 
     {
@@ -4488,21 +4546,23 @@ void DisperserAudioProcessorEditor::resized()
 
     if (ioSectionExpanded_)
     {
-        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, MIX, CHS F | CHS D; main params hidden
+        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, CHS F | CHS D; main params hidden
         inputSlider.setBounds  (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
         outputSlider.setBounds (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
         tiltSlider.setBounds   (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);
         filterBar_.setBounds   (horizontalLayout.leftX, mainTop + 3 * step, horizontalLayout.barW, verticalLayout.barH);
-        mixSlider.setBounds    (horizontalLayout.leftX, mainTop + 4 * step, horizontalLayout.barW, verticalLayout.barH);
+        panSlider.setBounds    (horizontalLayout.leftX, mainTop + 4 * step, horizontalLayout.barW, verticalLayout.barH);
+        mixSlider.setBounds    (horizontalLayout.leftX, mainTop + 5 * step, horizontalLayout.barW, verticalLayout.barH);
 
         inputSlider.setVisible (true);
         outputSlider.setVisible (true);
         tiltSlider.setVisible (true);
         filterBar_.setVisible (true);
+        panSlider.setVisible (true);
         mixSlider.setVisible (true);
 
-        // Chaos buttons at row 5
-        const int chaosY = mainTop + 5 * step;
+        // Chaos buttons at row 6
+        const int chaosY = mainTop + 6 * step;
         const int chaosRightX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
         const int chaosLeftW  = chaosRightX - horizontalLayout.leftX;
         const int chaosRightW = horizontalLayout.leftX + horizontalLayout.contentW - chaosRightX;
@@ -4554,12 +4614,14 @@ void DisperserAudioProcessorEditor::resized()
         outputSlider.setBounds (0, 0, 0, 0);
         tiltSlider.setBounds (0, 0, 0, 0);
         filterBar_.setBounds (0, 0, 0, 0);
+        panSlider.setBounds (0, 0, 0, 0);
         mixSlider.setBounds (0, 0, 0, 0);
 
         inputSlider.setVisible (false);
         outputSlider.setVisible (false);
         tiltSlider.setVisible (false);
         filterBar_.setVisible (false);
+        panSlider.setVisible (false);
         mixSlider.setVisible (false);
 
         chaosFilterButton.setVisible (false);

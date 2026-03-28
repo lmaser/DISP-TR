@@ -23,6 +23,7 @@ public:
 	static constexpr const char* kParamOutput    = "output";
 	static constexpr const char* kParamMix       = "mix";
 	static constexpr const char* kParamTilt      = "tilt";
+	static constexpr const char* kParamPan       = "pan";
 	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
 	static constexpr const char* kParamS0        = "s0";
@@ -83,6 +84,10 @@ public:
 	static constexpr float kTiltMin     = -6.0f;
 	static constexpr float kTiltMax     =  6.0f;
 	static constexpr float kTiltDefault =  0.0f;
+
+	static constexpr float kPanMin     = 0.0f;
+	static constexpr float kPanMax     = 1.0f;
+	static constexpr float kPanDefault = 0.5f;
 
 	static constexpr int kStyleMin     = 0;
 	static constexpr int kStyleMax     = 3;         // 0 = MONO, 1 = STEREO, 2 = WIDE, 3 = DUAL
@@ -296,6 +301,12 @@ private:
 	std::atomic<float>* chaosSpdParam      = nullptr;
 	std::atomic<float>* chaosAmtFilterParam = nullptr;
 	std::atomic<float>* chaosSpdFilterParam = nullptr;
+
+	std::atomic<float>* panParam       = nullptr;
+	float lastPan_      = -1.0f;
+	float lastPanLeft_  = 1.0f;
+	float lastPanRight_ = 1.0f;
+
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;

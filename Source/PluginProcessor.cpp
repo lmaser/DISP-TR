@@ -121,6 +121,7 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	modParam = apvts.getRawParameterValue (kParamMod);
 	mixParam = apvts.getRawParameterValue (kParamMix);
 	tiltParam = apvts.getRawParameterValue (kParamTilt);
+	panParam  = apvts.getRawParameterValue (kParamPan);
 	styleParam = apvts.getRawParameterValue (kParamStyle);
 	midiParam = apvts.getRawParameterValue (kParamMidi);
 	s0Param = apvts.getRawParameterValue (kParamS0);
@@ -1093,6 +1094,24 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		if (std::abs (smoothedMix        - mixValue)   < kSnapEpsilon) smoothedMix        = mixValue;
 	}
 
+	// ── Pan (equal-power, stereo only) ──
+	if (numChannels >= 2)
+	{
+		const float pan = panParam->load();
+		if (std::abs (pan - lastPan_) > 0.001f)
+		{
+			lastPan_ = pan;
+			const float angle = pan * 1.5707963f; // π/2
+			lastPanLeft_  = std::cos (angle);
+			lastPanRight_ = std::sin (angle);
+		}
+		if (std::abs (lastPan_ - 0.5f) > 0.001f)
+		{
+			juce::FloatVectorOperations::multiply (buffer.getWritePointer (0), lastPanLeft_,  numSamples);
+			juce::FloatVectorOperations::multiply (buffer.getWritePointer (1), lastPanRight_, numSamples);
+		}
+	}
+
 	// ── Safety limiter (+48 dBFS ≈ 251.19) ──
 	for (int ch = 0; ch < numChannels; ++ch)
 	{
@@ -1145,6 +1164,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamTilt, "Tilt",
 		juce::NormalisableRange<float> (kTiltMin, kTiltMax, 0.01f), kTiltDefault));
+
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamPan, "Pan",
+		juce::NormalisableRange<float> (kPanMin, kPanMax, 0.01f), kPanDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamInput, "Input",
