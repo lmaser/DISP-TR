@@ -556,8 +556,11 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	// ── STYLE: 0=MONO, 1=STEREO, 2=WIDE, 3=DUAL ────────────
 	const int style = juce::jlimit (kStyleMin, kStyleMax, loadIntParamOrDefault (styleParam, (int) kStyleDefault));
 
-	// Save dry input for dry/wet blend (only when mix < 1)
-	const bool needsDryBlend = (mixValue < 0.999f);
+	// ── Sum Bus (needed early for needsDryBlend) ────────────
+	const int sumBusVal  = juce::jlimit (0, 2, (int) sumBusParam->load());
+
+	// Save dry input for dry/wet blend (only when mix < 1 or sum bus active)
+	const bool needsDryBlend = (mixValue < 0.999f) || (sumBusVal != 0);
 	if (needsDryBlend)
 	{
 		if (dryBuffer.getNumChannels() < numChannels || dryBuffer.getNumSamples() < numSamples)
@@ -607,7 +610,6 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	// ── Mode In: M/S encode input before effect processing ──
 	const int modeInVal  = juce::jlimit (0, 2, (int) modeInParam->load());
 	const int modeOutVal = juce::jlimit (0, 2, (int) modeOutParam->load());
-	const int sumBusVal  = juce::jlimit (0, 2, (int) sumBusParam->load());
 
 	if (modeInVal > 0 && hasStereo)
 	{
@@ -1134,13 +1136,13 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 				if (sumBusVal == 1) // →M
 				{
-					const float midBus = (wL + wR) * kSqrt2Over2;
+					const float midBus = (wL + wR) * 0.5f;
 					outL[n] = dL + midBus;
 					outR[n] = dR + midBus;
 				}
 				else // →S
 				{
-					const float sideBus = (wL - wR) * kSqrt2Over2;
+					const float sideBus = (wL - wR) * 0.5f;
 					outL[n] = dL + sideBus;
 					outR[n] = dR - sideBus;
 				}
@@ -1312,7 +1314,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiHeight, "UI Height", 240, 1200, 360));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamUiPalette, "UI Palette", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamUiFxTail, "UI FX Tail", false));
-	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiColor0, "UI Color 0", 0, 0xFFFFFF, 0xFFFFFF));
+	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiColor0, "UI Color 0", 0, 0xFFFFFF, 0x00FF00));
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiColor1, "UI Color 1", 0, 0xFFFFFF, 0x000000));
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiColor2, "UI Color 2", 0, 0xFFFFFF, 0xFFFFFF));
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiColor3, "UI Color 3", 0, 0xFFFFFF, 0x000000));
