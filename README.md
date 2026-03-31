@@ -138,6 +138,24 @@ Each chaos target has its own toggle and shares two global controls:
 
 Uses exponential smoothing between random targets for glitch-free transitions.
 
+### LIM THRESHOLD (−36 to 0 dB)
+
+Peak limiter threshold. Sets the ceiling above which the limiter engages.
+At 0 dB (default) the limiter acts as a transparent safety net. Lower values compress the signal harder.
+
+### LIM MODE
+
+Limiter insertion point:
+- **NONE**: Limiter disabled.
+- **WET**: Limiter applied to the wet signal only (after processing, before dry/wet mix).
+- **GLOBAL**: Limiter applied to the final output (after output gain and dry/wet mix).
+
+The limiter is a dual-stage transparent peak limiter:
+- **Stage 1 (Leveler)**: 2 ms attack, 10 ms release — catches sustained overs.
+- **Stage 2 (Brickwall)**: Instant attack, 100 ms release — catches transient peaks.
+
+Stereo-linked gain reduction ensures consistent imaging.
+
 ## Technical Details
 
 ### DSP Architecture
@@ -169,3 +187,4 @@ Uses exponential smoothing between random targets for glitch-free transitions.
 - Removed duplicate chaos smoothing from outer call sites (already handled inside advance functions).
 - Checkbox rendering aligned with TR-series style (full fill when ticked).
 - All percentage parameters standardized to 1 decimal place across label, slider bar, and numeric entry prompt.
+- Added dual-stage transparent peak limiter with LIM THRESHOLD (−36 to 0 dB) and LIM MODE (NONE/WET/GLOBAL). Stereo-linked gain reduction with 2 ms/10 ms leveler + instant/100 ms brickwall stages.

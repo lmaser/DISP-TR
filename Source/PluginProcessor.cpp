@@ -151,6 +151,8 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	modeInParam   = apvts.getRawParameterValue (kParamModeIn);
 	modeOutParam  = apvts.getRawParameterValue (kParamModeOut);
 	sumBusParam   = apvts.getRawParameterValue (kParamSumBus);
+	limThresholdParam = apvts.getRawParameterValue (kParamLimThreshold);
+	limModeParam      = apvts.getRawParameterValue (kParamLimMode);
 }
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
@@ -279,6 +281,16 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	cachedChaosGSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.015f));
 	cachedChaosFSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.060f));
 	cachedChaosParamSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.010f));
+
+	// Reset limiter state and precompute coefficients
+	limEnv1_[0] = limEnv1_[1] = kLimFloor;
+	limEnv2_[0] = limEnv2_[1] = kLimFloor;
+	{
+		const float sr = (float) getSampleRate();
+		limAtt1_ = std::exp (-1.0f / (sr * 0.002f));
+		limRel1_ = std::exp (-1.0f / (sr * 0.010f));
+		limRel2_ = std::exp (-1.0f / (sr * 0.100f));
+	}
 
 	dspLog.enableDesktopAutoDump();
 }
@@ -1094,6 +1106,20 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		}
 	}
 
+	// ── Limiter (WET mode: after effect + Mode Out, before mix) ──
+	{
+		const int limMode = loadIntParamOrDefault (limModeParam, kLimModeDefault);
+		if (limMode == 1)
+		{
+			const float limThreshDb = loadAtomicOrDefault (limThresholdParam, kLimThresholdDefault);
+			const float limThreshLin = fastDecibelsToGain (limThreshDb);
+			auto* chL = buffer.getWritePointer (0);
+			auto* chR = (numChannels >= 2) ? buffer.getWritePointer (1) : chL;
+			for (int i = 0; i < numSamples; ++i)
+				applyLimiter (chL[i], chR[i], limThreshLin);
+		}
+	}
+
 	// ── Per-sample smoothed Input/Output/Mix + Dry/Wet blend (fused loop) ──
 	if (needsDryBlend)
 	{
@@ -1185,6 +1211,20 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		{
 			juce::FloatVectorOperations::multiply (buffer.getWritePointer (0), lastPanLeft_,  numSamples);
 			juce::FloatVectorOperations::multiply (buffer.getWritePointer (1), lastPanRight_, numSamples);
+		}
+	}
+
+	// ── Limiter (GLOBAL mode: after pan, before safety clip) ──
+	{
+		const int limMode = loadIntParamOrDefault (limModeParam, kLimModeDefault);
+		if (limMode == 2)
+		{
+			const float limThreshDb = loadAtomicOrDefault (limThresholdParam, kLimThresholdDefault);
+			const float limThreshLin = fastDecibelsToGain (limThreshDb);
+			auto* chL = buffer.getWritePointer (0);
+			auto* chR = (numChannels >= 2) ? buffer.getWritePointer (1) : chL;
+			for (int i = 0; i < numSamples; ++i)
+				applyLimiter (chL[i], chR[i], limThreshLin);
 		}
 	}
 
@@ -1309,6 +1349,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS0, "S0", false));
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamS100, "S100", false));
+
+	// Limiter
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamLimThreshold, "Limiter Threshold",
+		juce::NormalisableRange<float> (kLimThresholdMin, kLimThresholdMax, 0.1f), kLimThresholdDefault));
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamLimMode, "Limiter Mode", juce::StringArray { "NONE", "WET", "GLOBAL" }, kLimModeDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiWidth, "UI Width", 360, 1600, 360));
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiHeight, "UI Height", 240, 1200, 360));

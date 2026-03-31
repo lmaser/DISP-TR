@@ -48,6 +48,10 @@ public:
 	static constexpr const char* kParamModeOut  = "mode_out";
 	static constexpr const char* kParamSumBus   = "sum_bus";
 
+	// Limiter
+	static constexpr const char* kParamLimThreshold = "lim_threshold";
+	static constexpr const char* kParamLimMode      = "lim_mode";
+
 	static constexpr const char* kParamUiWidth   = "ui_width";
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
@@ -314,6 +318,9 @@ private:
 	std::atomic<float>* modeOutParam  = nullptr;
 	std::atomic<float>* sumBusParam   = nullptr;
 
+	std::atomic<float>* limThresholdParam = nullptr;
+	std::atomic<float>* limModeParam      = nullptr;
+
 	std::atomic<float>* panParam       = nullptr;
 	float lastPan_      = -1.0f;
 	float lastPanLeft_  = 1.0f;
@@ -425,6 +432,60 @@ private:
 	}
 
 	DspDebugLog dspLog;
+
+	// Limiter ranges and defaults
+	static constexpr float kLimThresholdMin     = -36.0f;
+	static constexpr float kLimThresholdMax     = 0.0f;
+	static constexpr float kLimThresholdDefault = 0.0f;
+	static constexpr int   kLimModeDefault      = 0;   // 0=NONE  1=WET  2=GLOBAL
+
+	// Dual-stage transparent limiter state (stereo-linked)
+	static constexpr float kLimFloor = 1.0e-12f;
+	float limEnv1_[2] = { kLimFloor, kLimFloor };
+	float limEnv2_[2] = { kLimFloor, kLimFloor };
+	float limAtt1_ = 0.0f;
+	float limRel1_ = 0.0f;
+	float limRel2_ = 0.0f;
+
+	inline void applyLimiter (float& sampleL, float& sampleR, float threshLin) noexcept
+	{
+		const float peakL = std::abs (sampleL);
+		const float peakR = std::abs (sampleR);
+
+		// Stage 1 — leveler (2 ms attack, 10 ms release)
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv1_[ch])
+				limEnv1_[ch] = limAtt1_ * limEnv1_[ch] + (1.0f - limAtt1_) * p;
+			else
+				limEnv1_[ch] = limRel1_ * limEnv1_[ch] + (1.0f - limRel1_) * p;
+			if (limEnv1_[ch] < kLimFloor) limEnv1_[ch] = kLimFloor;
+		}
+
+		// Stage 2 — brickwall (instant attack, 100 ms release)
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv2_[ch])
+				limEnv2_[ch] = p;
+			else
+				limEnv2_[ch] = limRel2_ * limEnv2_[ch] + (1.0f - limRel2_) * p;
+			if (limEnv2_[ch] < kLimFloor) limEnv2_[ch] = kLimFloor;
+		}
+
+		// Stereo-linked gain reduction
+		float gr = 1.0f;
+		const float maxEnv1 = juce::jmax (limEnv1_[0], limEnv1_[1]);
+		const float maxEnv2 = juce::jmax (limEnv2_[0], limEnv2_[1]);
+		if (maxEnv1 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv1);
+		if (maxEnv2 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv2);
+
+		sampleL *= gr;
+		sampleR *= gr;
+	}
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisperserAudioProcessor)
 };

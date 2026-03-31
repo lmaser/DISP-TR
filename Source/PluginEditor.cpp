@@ -579,7 +579,7 @@ void DisperserAudioProcessorEditor::FilterBarComponent::mouseDoubleClick (const 
 DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProcessor& p)
 : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    const std::array<BarSlider*, 12> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider };
+    const std::array<BarSlider*, 13> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider, &limThresholdSlider };
 
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
     crtEnabled = audioProcessor.getUiFxTailEnabled();
@@ -641,6 +641,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     tiltSlider.setNumDecimalPlacesToDisplay (1);
     panSlider.setNumDecimalPlacesToDisplay (1);
     mixSlider.setNumDecimalPlacesToDisplay (1);
+    limThresholdSlider.setNumDecimalPlacesToDisplay (1);
 
     // IO sliders start hidden (collapsible section, collapsed by default)
     inputSlider.setVisible (false);
@@ -648,6 +649,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     tiltSlider.setVisible (false);
     panSlider.setVisible (false);
     mixSlider.setVisible (false);
+    limThresholdSlider.setVisible (false);
 
     // Filter bar — hidden along with IO sliders in collapsed state
     filterBar_.setOwner (this);
@@ -714,11 +716,23 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         sumBusCombo.setVisible (false);
     }
 
+    // Limiter Mode combo
+    {
+        addAndMakeVisible (limModeCombo);
+        limModeCombo.addItem ("NONE",   1);
+        limModeCombo.addItem ("WET",    2);
+        limModeCombo.addItem ("GLOBAL", 3);
+        limModeCombo.setJustificationType (juce::Justification::centred);
+        limModeCombo.setLookAndFeel (&lnf);
+        limModeCombo.setVisible (false);
+    }
+
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
                            1.0);
     styleSlider.setRange (0, 3, 1);
     styleSlider.setAllowNumericPopup (false);
+    limThresholdSlider.setAllowNumericPopup (false);
 
     invButton.setButtonText ("");
     midiButton.setButtonText ("");
@@ -761,6 +775,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     bindSlider (tiltAttachment, DisperserAudioProcessor::kParamTilt, tiltSlider, kDefaultTilt);
     bindSlider (panAttachment,  DisperserAudioProcessor::kParamPan,  panSlider,  0.5);
     bindSlider (mixAttachment, DisperserAudioProcessor::kParamMix, mixSlider, kDefaultMix);
+    bindSlider (limThresholdAttachment, DisperserAudioProcessor::kParamLimThreshold, limThresholdSlider, kDefaultLimThreshold);
 
     auto bindButton = [&] (std::unique_ptr<ButtonAttachment>& attachment,
                            const char* paramId,
@@ -777,6 +792,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     modeInAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamModeIn,  modeInCombo);
     modeOutAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamModeOut, modeOutCombo);
     sumBusAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamSumBus,  sumBusCombo);
+    limModeAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamLimMode, limModeCombo);
 
     for (auto* paramId : kUiMirrorParamIds)
         audioProcessor.apvts.addParameterListener (paramId, this);
@@ -824,7 +840,7 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     dismissEditorOwnedModalPrompts (lnf);
     setPromptOverlayActive (false);
 
-    const std::array<BarSlider*, 12> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider };
+    const std::array<BarSlider*, 13> barSliders { &freqSlider, &modSlider, &feedbackSlider, &amountSlider, &seriesSlider, &shapeSlider, &styleSlider, &inputSlider, &outputSlider, &tiltSlider, &panSlider, &mixSlider, &limThresholdSlider };
     for (auto* slider : barSliders)
         slider->removeListener (this);
 
@@ -834,6 +850,7 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     modeInCombo.setLookAndFeel (nullptr);
     modeOutCombo.setLookAndFeel (nullptr);
     sumBusCombo.setLookAndFeel (nullptr);
+    limModeCombo.setLookAndFeel (nullptr);
 
     setLookAndFeel (nullptr);
 }
@@ -1093,6 +1110,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const float modMult = (float) modSliderToMultiplier (modSlider.getValue());
     const double mixV = juce::jlimit (0.0, 1.0, mixSlider.getValue());
     const int mixPct = (int) std::lround (mixV * 100.0);
+    const float limDb = (float) limThresholdSlider.getValue();
 
     const auto oldAmountFullLen = cachedAmountTextFull.length();
     const auto oldAmountShortLen = cachedAmountTextShort.length();
@@ -1116,6 +1134,8 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const auto oldOutputShortLen = cachedOutputTextShort.length();
     const auto oldPanFullLen = cachedPanTextFull.length();
     const auto oldPanShortLen = cachedPanTextShort.length();
+    const auto oldLimFullLen = cachedLimThresholdTextFull.length();
+    const auto oldLimShortLen = cachedLimThresholdTextShort.length();
 
     cachedAmountTextFull  = juce::String (amountV) + " STAGES";
     cachedAmountTextShort = juce::String (amountV) + " STG";
@@ -1201,6 +1221,21 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedPanTextFull  = getPanText();
     cachedPanTextShort = getPanTextShort();
 
+    {
+        if (limDb >= -0.05f)
+        {
+            cachedLimThresholdTextFull  = "0 dB LIMIT";
+            cachedLimThresholdTextShort = "0 dB LIM";
+            cachedLimThresholdIntOnly   = "0dB";
+        }
+        else
+        {
+            cachedLimThresholdTextFull  = juce::String ((int) limDb) + " dB LIMIT";
+            cachedLimThresholdTextShort = juce::String ((int) limDb) + " dB LIM";
+            cachedLimThresholdIntOnly   = juce::String ((int) limDb) + "dB";
+        }
+    }
+
     const bool lengthChanged = oldAmountFullLen  != cachedAmountTextFull.length()
                             || oldAmountShortLen != cachedAmountTextShort.length()
                             || oldSeriesFullLen  != cachedSeriesTextFull.length()
@@ -1222,7 +1257,9 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
                             || oldOutputFullLen   != cachedOutputTextFull.length()
                             || oldOutputShortLen  != cachedOutputTextShort.length()
                             || oldPanFullLen      != cachedPanTextFull.length()
-                            || oldPanShortLen     != cachedPanTextShort.length();
+                            || oldPanShortLen     != cachedPanTextShort.length()
+                            || oldLimFullLen      != cachedLimThresholdTextFull.length()
+                            || oldLimShortLen     != cachedLimThresholdTextShort.length();
 
     return lengthChanged;
 }
@@ -3862,16 +3899,17 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
     m.btnRowGap = juce::jlimit (4, 14, (int) std::round (editorH * 0.008));
     m.btnY = editorH - m.bottomMargin - m.box;
 
-    // When IO is expanded, chaos checkboxes sit above the button row
-    m.chaosRowY = ioExpanded ? (m.btnY - m.btnRowGap - m.box) : 0;
+    // When expanded, buttons are hidden — chaos sits at the very bottom row.
+    // When collapsed, buttons occupy btnY and chaos is hidden.
+    m.chaosRowY = ioExpanded ? (editorH - m.bottomMargin - m.box) : 0;
 
     const int sliderBottomRef = ioExpanded ? m.chaosRowY : m.btnY;
     m.availableForSliders = juce::jmax (40, sliderBottomRef - m.betweenSlidersAndButtons - m.topMargin);
 
-    // Bars below toggle: 7 IO bars when expanded (IN, OUT, TILT, FILTER, PAN, MIX + chaos row), 7 main bars when collapsed.
+    // Bars below toggle: 8 IO rows when expanded (IN, OUT, TILT, FILTER, PAN, MIX, LIM + MODE_ROW), 7 main bars when collapsed.
     // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
-    const int numSliders = ioExpanded ? 7 : 7;
-    const int numGaps    = ioExpanded ? 7 : 7;  // (N-1) inter-slider + 1 toggle-to-first
+    const int numSliders = ioExpanded ? 8 : 7;
+    const int numGaps    = ioExpanded ? 8 : 7;  // (N-1) inter-slider + 1 toggle-to-first
 
     m.toggleBarH = 20;  // fixed visual height for click area
     const int spaceForScale = juce::jmax (40, m.availableForSliders - m.toggleBarH);
@@ -3951,6 +3989,21 @@ void DisperserAudioProcessorEditor::updateCachedLayout()
     else
     {
         cachedPanValueArea_ = {};
+    }
+
+    // Lim threshold slider value area
+    if (limThresholdSlider.isVisible())
+    {
+        const auto& lb = limThresholdSlider.getBounds();
+        const int valueX = lb.getRight() + cachedHLayout_.valuePad;
+        const int maxW = juce::jmax (0, getWidth() - valueX - kValueAreaRightMarginPx);
+        const int vw   = juce::jmin (cachedHLayout_.valueW, maxW);
+        const int y    = lb.getCentreY() - (kValueAreaHeightPx / 2);
+        cachedLimThresholdValueArea_ = { valueX, y, juce::jmax (0, vw), kValueAreaHeightPx };
+    }
+    else
+    {
+        cachedLimThresholdValueArea_ = {};
     }
 
     // Cache toggle bar area
@@ -4465,6 +4518,10 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         // Pan legend
         if (! cachedPanValueArea_.isEmpty())
             drawLegendForMode (cachedPanValueArea_, cachedPanTextFull, cachedPanTextShort, cachedPanTextShort);
+
+        // Lim threshold legend
+        if (limThresholdSlider.isVisible() && cachedLimThresholdValueArea_.getWidth() > 0)
+            drawLegendForMode (cachedLimThresholdValueArea_, cachedLimThresholdTextFull, cachedLimThresholdTextShort, cachedLimThresholdIntOnly);
     }
 
     {
@@ -4495,10 +4552,13 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             g.drawText (labelText, drawArea.getX(), drawArea.getY(), drawArea.getWidth(), drawArea.getHeight(), juce::Justification::left, true);
         };
 
-        drawToggleLegend (getInvLabelArea(), chooseToggleLabel (invButton, invCR, "INVERT", "INV"), invCR);
-        drawToggleLegend (getMidiLabelArea(), chooseToggleLabel (midiButton, midiCR, "MIDI", "MD"), midiCR);
+        if (invButton.isVisible())
+        {
+            drawToggleLegend (getInvLabelArea(), chooseToggleLabel (invButton, invCR, "INVERT", "INV"), invCR);
+            drawToggleLegend (getMidiLabelArea(), chooseToggleLabel (midiButton, midiCR, "MIDI", "MD"), midiCR);
+        }
 
-        // Mode In / Mode Out / Sum Bus labels above combos
+        // Mode In / Mode Out / Sum Bus / Limiter Mode labels above combos
         if (modeInCombo.isVisible())
         {
             const auto font = juce::Font (juce::FontOptions (11.0f).withStyle ("Bold"));
@@ -4515,6 +4575,7 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             drawComboLabel (modeInCombo,  "MODE IN",  "IN");
             drawComboLabel (modeOutCombo, "MODE OUT", "OUT");
             drawComboLabel (sumBusCombo,  "SUM BUS",  "SUM");
+            drawComboLabel (limModeCombo, "LIMIT",    "LIM");
         }
 
         // Chaos toggle labels (visible only when IO expanded)
@@ -4630,13 +4691,14 @@ void DisperserAudioProcessorEditor::resized()
 
     if (ioSectionExpanded_)
     {
-        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, MODE IN/OUT/SUM, CHSF | CHSD; main params hidden
+        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, LIM THRESHOLD, MODE combos, CHSF | CHSD; main params hidden
         inputSlider.setBounds  (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
         outputSlider.setBounds (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
         tiltSlider.setBounds   (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);
         filterBar_.setBounds   (horizontalLayout.leftX, mainTop + 3 * step, horizontalLayout.barW, verticalLayout.barH);
         panSlider.setBounds    (horizontalLayout.leftX, mainTop + 4 * step, horizontalLayout.barW, verticalLayout.barH);
         mixSlider.setBounds    (horizontalLayout.leftX, mainTop + 5 * step, horizontalLayout.barW, verticalLayout.barH);
+        limThresholdSlider.setBounds (horizontalLayout.leftX, mainTop + 6 * step, horizontalLayout.barW, verticalLayout.barH);
 
         inputSlider.setVisible (true);
         outputSlider.setVisible (true);
@@ -4644,19 +4706,21 @@ void DisperserAudioProcessorEditor::resized()
         filterBar_.setVisible (true);
         panSlider.setVisible (true);
         mixSlider.setVisible (true);
+        limThresholdSlider.setVisible (true);
 
         const int modeRowPad = 10;
 
-        // Mode In / Mode Out / Sum Bus — 3 combos on row 6
+        // Mode In / Mode Out / Sum Bus / Limiter Mode — 4 combos on row 7
         {
-            const int modeY = mainTop + 6 * step + modeRowPad;
+            const int modeY = mainTop + 7 * step + modeRowPad;
             const int comboGap = 4;
             const int totalW = horizontalLayout.barW + horizontalLayout.valuePad + horizontalLayout.valueW;
-            const int comboW = (totalW - comboGap * 2) / 3;
+            const int comboW = (totalW - comboGap * 3) / 4;
             const int comboH = juce::jmax (24, verticalLayout.barH);
             modeInCombo.setBounds  (horizontalLayout.leftX,                           modeY, comboW, comboH);
-            modeOutCombo.setBounds (horizontalLayout.leftX + comboW + comboGap,        modeY, comboW, comboH);
+            modeOutCombo.setBounds (horizontalLayout.leftX + (comboW + comboGap),      modeY, comboW, comboH);
             sumBusCombo.setBounds  (horizontalLayout.leftX + (comboW + comboGap) * 2,  modeY, comboW, comboH);
+            limModeCombo.setBounds (horizontalLayout.leftX + (comboW + comboGap) * 3,  modeY, comboW, comboH);
         }
 
         // Chaos buttons at chaosRowY
@@ -4673,10 +4737,15 @@ void DisperserAudioProcessorEditor::resized()
         modeInCombo.setVisible (true);
         modeOutCombo.setVisible (true);
         sumBusCombo.setVisible (true);
+        limModeCombo.setVisible (true);
         chaosFilterButton.setVisible (true);
         chaosFilterDisplay.setVisible (true);
         chaosDelayButton.setVisible (true);
         chaosDelayDisplay.setVisible (true);
+
+        invButton.setVisible (false);
+        midiButton.setVisible (false);
+        midiChannelDisplay.setVisible (false);
 
         freqSlider.setBounds (0, 0, 0, 0);
         modSlider.setBounds (0, 0, 0, 0);
@@ -4719,6 +4788,7 @@ void DisperserAudioProcessorEditor::resized()
         filterBar_.setBounds (0, 0, 0, 0);
         panSlider.setBounds (0, 0, 0, 0);
         mixSlider.setBounds (0, 0, 0, 0);
+        limThresholdSlider.setBounds (0, 0, 0, 0);
 
         inputSlider.setVisible (false);
         outputSlider.setVisible (false);
@@ -4726,6 +4796,7 @@ void DisperserAudioProcessorEditor::resized()
         filterBar_.setVisible (false);
         panSlider.setVisible (false);
         mixSlider.setVisible (false);
+        limThresholdSlider.setVisible (false);
 
         chaosFilterButton.setVisible (false);
         chaosFilterDisplay.setVisible (false);
@@ -4734,6 +4805,11 @@ void DisperserAudioProcessorEditor::resized()
         modeInCombo.setVisible (false);
         modeOutCombo.setVisible (false);
         sumBusCombo.setVisible (false);
+        limModeCombo.setVisible (false);
+
+        invButton.setVisible (true);
+        midiButton.setVisible (true);
+        midiChannelDisplay.setVisible (true);
     }
 
     const int buttonAreaX = horizontalLayout.leftX;

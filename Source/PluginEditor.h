@@ -124,6 +124,7 @@ private:
     BarSlider tiltSlider;
     BarSlider panSlider;
     BarSlider mixSlider;
+    BarSlider limThresholdSlider;
 
     using DISPScheme = TR::TRScheme;
 
@@ -190,6 +191,7 @@ private:
     juce::ComboBox modeInCombo;
     juce::ComboBox modeOutCombo;
     juce::ComboBox sumBusCombo;
+    juce::ComboBox limModeCombo;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -207,6 +209,7 @@ private:
     std::unique_ptr<SliderAttachment> tiltAttachment;
     std::unique_ptr<SliderAttachment> panAttachment;
     std::unique_ptr<SliderAttachment> mixAttachment;
+    std::unique_ptr<SliderAttachment> limThresholdAttachment;
 
     std::unique_ptr<ButtonAttachment> invAttachment;
     std::unique_ptr<ButtonAttachment> midiAttachment;
@@ -216,6 +219,7 @@ private:
     std::unique_ptr<ComboBoxAttachment> modeInAttachment;
     std::unique_ptr<ComboBoxAttachment> modeOutAttachment;
     std::unique_ptr<ComboBoxAttachment> sumBusAttachment;
+    std::unique_ptr<ComboBoxAttachment> limModeAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
@@ -430,6 +434,9 @@ private:
     juce::String cachedMixTextFull;
     juce::String cachedMixTextShort;
     juce::String cachedMixIntOnly;
+    juce::String cachedLimThresholdTextFull;
+    juce::String cachedLimThresholdTextShort;
+    juce::String cachedLimThresholdIntOnly;
     juce::String cachedTiltTextFull;
     juce::String cachedTiltTextShort;
     juce::String cachedTiltIntOnly;
@@ -451,7 +458,9 @@ private:
     std::array<juce::Rectangle<int>, 11> cachedValueAreas_;
     juce::Rectangle<int> cachedFilterValueArea_;
     juce::Rectangle<int> cachedPanValueArea_;
+    juce::Rectangle<int> cachedLimThresholdValueArea_;
 
+    static constexpr double kDefaultLimThreshold = 0.0;
     static constexpr double kDefaultAmount = (double) DisperserAudioProcessor::kAmountDefault;
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
     static constexpr double kDefaultFreq   = (double) DisperserAudioProcessor::kFreqDefault;
