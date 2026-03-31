@@ -177,7 +177,7 @@ private:
 
     FilterBarComponent filterBar_;
 
-    juce::ToggleButton invButton;
+    juce::ToggleButton altButton;
     juce::ToggleButton midiButton;
     juce::Label midiChannelDisplay;
 
@@ -192,6 +192,8 @@ private:
     juce::ComboBox modeOutCombo;
     juce::ComboBox sumBusCombo;
     juce::ComboBox limModeCombo;
+    juce::ComboBox invPolCombo;
+    juce::ComboBox invStrCombo;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -211,7 +213,7 @@ private:
     std::unique_ptr<SliderAttachment> mixAttachment;
     std::unique_ptr<SliderAttachment> limThresholdAttachment;
 
-    std::unique_ptr<ButtonAttachment> invAttachment;
+    std::unique_ptr<ButtonAttachment> altAttachment;
     std::unique_ptr<ButtonAttachment> midiAttachment;
     std::unique_ptr<ButtonAttachment> chaosFilterAttachment;
     std::unique_ptr<ButtonAttachment> chaosDelayAttachment;
@@ -220,6 +222,8 @@ private:
     std::unique_ptr<ComboBoxAttachment> modeOutAttachment;
     std::unique_ptr<ComboBoxAttachment> sumBusAttachment;
     std::unique_ptr<ComboBoxAttachment> limModeAttachment;
+    std::unique_ptr<ComboBoxAttachment> invPolAttachment;
+    std::unique_ptr<ComboBoxAttachment> invStrAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;
@@ -399,7 +403,7 @@ private:
 
     juce::Rectangle<int> getValueAreaFor (const juce::Rectangle<int>& barBounds) const;
     juce::Slider* getSliderForValueAreaPoint (juce::Point<int> p);
-    juce::Rectangle<int> getInvLabelArea() const;
+    juce::Rectangle<int> getAltLabelArea() const;
     juce::Rectangle<int> getMidiLabelArea() const;
     juce::Rectangle<int> getInfoIconArea() const;
     void updateInfoIconCache();

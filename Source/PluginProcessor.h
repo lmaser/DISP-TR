@@ -16,7 +16,7 @@ public:
 	static constexpr const char* kParamSeries    = "series";
 	static constexpr const char* kParamFreq      = "freq";
 	static constexpr const char* kParamShape     = "shape";
-	static constexpr const char* kParamInv       = "inv";
+	static constexpr const char* kParamAlt       = "alt";
 	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamMod       = "mod";
 	static constexpr const char* kParamInput     = "input";
@@ -47,6 +47,10 @@ public:
 	static constexpr const char* kParamModeIn   = "mode_in";
 	static constexpr const char* kParamModeOut  = "mode_out";
 	static constexpr const char* kParamSumBus   = "sum_bus";
+
+	// Invert
+	static constexpr const char* kParamInvPol = "inv_pol";
+	static constexpr const char* kParamInvStr = "inv_str";
 
 	// Limiter
 	static constexpr const char* kParamLimThreshold = "lim_threshold";
@@ -119,6 +123,8 @@ public:
 
 	static constexpr int   kModeInOutDefault = 0;
 	static constexpr int   kSumBusDefault    = 0;
+	static constexpr int   kInvPolDefault    = 0;   // 0=NONE  1=WET  2=GLOBAL
+	static constexpr int   kInvStrDefault    = 0;   // 0=NONE  1=WET  2=GLOBAL
 	static constexpr float kSqrt2Over2       = 0.707106781f;
 
 	void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -292,7 +298,7 @@ private:
 	std::atomic<float>* seriesParam = nullptr;
 	std::atomic<float>* freqParam = nullptr;
 	std::atomic<float>* shapeParam = nullptr;
-	std::atomic<float>* invParam = nullptr;
+	std::atomic<float>* altParam = nullptr;
 	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* modParam = nullptr;
 	std::atomic<float>* mixParam = nullptr;
@@ -317,6 +323,9 @@ private:
 	std::atomic<float>* modeInParam   = nullptr;
 	std::atomic<float>* modeOutParam  = nullptr;
 	std::atomic<float>* sumBusParam   = nullptr;
+
+	std::atomic<float>* invPolParam       = nullptr;
+	std::atomic<float>* invStrParam       = nullptr;
 
 	std::atomic<float>* limThresholdParam = nullptr;
 	std::atomic<float>* limModeParam      = nullptr;

@@ -727,6 +727,22 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         limModeCombo.setVisible (false);
     }
 
+    // Invert Polarity / Invert Stereo combos
+    {
+        auto setupInvCombo = [this] (juce::ComboBox& combo)
+        {
+            addAndMakeVisible (combo);
+            combo.addItem ("NONE",   1);
+            combo.addItem ("WET",    2);
+            combo.addItem ("GLOBAL", 3);
+            combo.setJustificationType (juce::Justification::centred);
+            combo.setLookAndFeel (&lnf);
+            combo.setVisible (false);
+        };
+        setupInvCombo (invPolCombo);
+        setupInvCombo (invStrCombo);
+    }
+
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
                            1.0);
@@ -734,10 +750,10 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     styleSlider.setAllowNumericPopup (false);
     limThresholdSlider.setAllowNumericPopup (false);
 
-    invButton.setButtonText ("");
+    altButton.setButtonText ("");
     midiButton.setButtonText ("");
 
-    addAndMakeVisible (invButton);
+    addAndMakeVisible (altButton);
     addAndMakeVisible (midiButton);
 
     // MIDI channel tooltip overlay — invisible label positioned over the MIDI legend.
@@ -784,7 +800,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         attachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, paramId, button);
     };
 
-    bindButton (invAttachment, DisperserAudioProcessor::kParamInv, invButton);
+    bindButton (altAttachment, DisperserAudioProcessor::kParamAlt, altButton);
     bindButton (midiAttachment, DisperserAudioProcessor::kParamMidi, midiButton);
     bindButton (chaosFilterAttachment, DisperserAudioProcessor::kParamChaos, chaosFilterButton);
     bindButton (chaosDelayAttachment,  DisperserAudioProcessor::kParamChaosD, chaosDelayButton);
@@ -793,6 +809,8 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     modeOutAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamModeOut, modeOutCombo);
     sumBusAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamSumBus,  sumBusCombo);
     limModeAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamLimMode, limModeCombo);
+    invPolAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamInvPol,  invPolCombo);
+    invStrAttachment  = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, DisperserAudioProcessor::kParamInvStr,  invStrCombo);
 
     for (auto* paramId : kUiMirrorParamIds)
         audioProcessor.apvts.addParameterListener (paramId, this);
@@ -851,6 +869,8 @@ DisperserAudioProcessorEditor::~DisperserAudioProcessorEditor()
     modeOutCombo.setLookAndFeel (nullptr);
     sumBusCombo.setLookAndFeel (nullptr);
     limModeCombo.setLookAndFeel (nullptr);
+    invPolCombo.setLookAndFeel (nullptr);
+    invStrCombo.setLookAndFeel (nullptr);
 
     setLookAndFeel (nullptr);
 }
@@ -868,6 +888,13 @@ void DisperserAudioProcessorEditor::applyActivePalette()
     activeScheme = scheme;
     lnf.setScheme (activeScheme);
     filterBar_.setScheme (activeScheme);
+
+    for (auto* combo : { &modeInCombo, &modeOutCombo, &sumBusCombo, &limModeCombo, &invPolCombo, &invStrCombo })
+    {
+        combo->setColour (juce::ComboBox::textColourId,       scheme.text);
+        combo->setColour (juce::ComboBox::backgroundColourId, scheme.bg);
+        combo->setColour (juce::ComboBox::outlineColourId,    scheme.outline);
+    }
 }
 
 void DisperserAudioProcessorEditor::applyCrtState (bool enabled)
@@ -922,7 +949,7 @@ void DisperserAudioProcessorEditor::setPromptOverlayActive (bool shouldBeActive)
 
     const bool enableControls = ! shouldBeActive;
     const std::array<juce::Component*, 12> interactiveControls {
-        &amountSlider, &seriesSlider, &freqSlider, &shapeSlider, &styleSlider, &feedbackSlider, &modSlider, &inputSlider, &outputSlider, &mixSlider, &invButton, &midiButton
+        &amountSlider, &seriesSlider, &freqSlider, &shapeSlider, &styleSlider, &feedbackSlider, &modSlider, &inputSlider, &outputSlider, &mixSlider, &altButton, &midiButton
     };
     for (auto* control : interactiveControls)
         control->setEnabled (enableControls);
@@ -3906,10 +3933,10 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
     const int sliderBottomRef = ioExpanded ? m.chaosRowY : m.btnY;
     m.availableForSliders = juce::jmax (40, sliderBottomRef - m.betweenSlidersAndButtons - m.topMargin);
 
-    // Bars below toggle: 8 IO rows when expanded (IN, OUT, TILT, FILTER, PAN, MIX, LIM + MODE_ROW), 7 main bars when collapsed.
+    // Bars below toggle: 9 IO rows when expanded (IN, OUT, TILT, FILTER, PAN, MIX, LIM + MODE_ROW + INV_ROW), 7 main bars when collapsed.
     // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
-    const int numSliders = ioExpanded ? 8 : 7;
-    const int numGaps    = ioExpanded ? 8 : 7;  // (N-1) inter-slider + 1 toggle-to-first
+    const int numSliders = ioExpanded ? 9 : 7;
+    const int numGaps    = ioExpanded ? 9 : 7;  // (N-1) inter-slider + 1 toggle-to-first
 
     m.toggleBarH = 20;  // fixed visual height for click area
     const int spaceForScale = juce::jmax (40, m.availableForSliders - m.toggleBarH);
@@ -4181,9 +4208,9 @@ namespace
     }
 }
 
-juce::Rectangle<int> DisperserAudioProcessorEditor::getInvLabelArea() const
+juce::Rectangle<int> DisperserAudioProcessorEditor::getAltLabelArea() const
 {
-    return makeToggleLabelArea (invButton, midiButton.getX() - kToggleLegendCollisionPadPx, "INVERT", "INV");
+    return makeToggleLabelArea (altButton, midiButton.getX() - kToggleLegendCollisionPadPx, "ALT", "ALT");
 }
 
 juce::Rectangle<int> DisperserAudioProcessorEditor::getMidiLabelArea() const
@@ -4240,9 +4267,9 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    if (getInvLabelArea().contains (p))
+    if (getAltLabelArea().contains (p))
     {
-        invButton.setToggleState (! invButton.getToggleState(), juce::sendNotificationSync);
+        altButton.setToggleState (! altButton.getToggleState(), juce::sendNotificationSync);
         return;
     }
 
@@ -4552,9 +4579,9 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             g.drawText (labelText, drawArea.getX(), drawArea.getY(), drawArea.getWidth(), drawArea.getHeight(), juce::Justification::left, true);
         };
 
-        if (invButton.isVisible())
+        if (altButton.isVisible())
         {
-            drawToggleLegend (getInvLabelArea(), chooseToggleLabel (invButton, invCR, "INVERT", "INV"), invCR);
+            drawToggleLegend (getAltLabelArea(), chooseToggleLabel (altButton, invCR, "ALT", "ALT"), invCR);
             drawToggleLegend (getMidiLabelArea(), chooseToggleLabel (midiButton, midiCR, "MIDI", "MD"), midiCR);
         }
 
@@ -4562,6 +4589,7 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
         if (modeInCombo.isVisible())
         {
             const auto font = juce::Font (juce::FontOptions (11.0f).withStyle ("Bold"));
+            g.setColour (scheme.text);
             g.setFont (font);
             auto drawComboLabel = [&] (const juce::ComboBox& combo, const juce::String& full, const juce::String& shortTxt)
             {
@@ -4576,6 +4604,25 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             drawComboLabel (modeOutCombo, "MODE OUT", "OUT");
             drawComboLabel (sumBusCombo,  "SUM BUS",  "SUM");
             drawComboLabel (limModeCombo, "LIMIT",    "LIM");
+        }
+
+        // Invert Polarity / Invert Stereo labels above combos
+        if (invPolCombo.isVisible())
+        {
+            const auto font = juce::Font (juce::FontOptions (11.0f).withStyle ("Bold"));
+            g.setColour (scheme.text);
+            g.setFont (font);
+            auto drawComboLabel = [&] (const juce::ComboBox& combo, const juce::String& full, const juce::String& shortTxt)
+            {
+                const auto area = combo.getBounds().withHeight (14).translated (0, -15);
+                const float comboW = (float) combo.getWidth();
+                juce::GlyphArrangement ga;
+                ga.addLineOfText (font, full, 0.0f, 0.0f);
+                const bool useShort = ga.getBoundingBox (0, -1, false).getWidth() > comboW;
+                g.drawText (useShort ? shortTxt : full, area, juce::Justification::centred);
+            };
+            drawComboLabel (invPolCombo, "INV POL", "POL");
+            drawComboLabel (invStrCombo, "INV STR", "STR");
         }
 
         // Chaos toggle labels (visible only when IO expanded)
@@ -4723,6 +4770,17 @@ void DisperserAudioProcessorEditor::resized()
             limModeCombo.setBounds (horizontalLayout.leftX + (comboW + comboGap) * 3,  modeY, comboW, comboH);
         }
 
+        // Invert Polarity / Invert Stereo — 2 combos on row 8
+        {
+            const int invY = mainTop + 7 * step + modeRowPad + juce::jmax (24, verticalLayout.barH) + 18;
+            const int comboGap = 4;
+            const int totalW = horizontalLayout.barW + horizontalLayout.valuePad + horizontalLayout.valueW;
+            const int comboW = (totalW - comboGap) / 2;
+            const int comboH = juce::jmax (24, verticalLayout.barH);
+            invPolCombo.setBounds (horizontalLayout.leftX,                          invY, comboW, comboH);
+            invStrCombo.setBounds (horizontalLayout.leftX + (comboW + comboGap),    invY, comboW, comboH);
+        }
+
         // Chaos buttons at chaosRowY
         const int chaosY = verticalLayout.chaosRowY;
         const int chaosH = verticalLayout.box;
@@ -4738,12 +4796,14 @@ void DisperserAudioProcessorEditor::resized()
         modeOutCombo.setVisible (true);
         sumBusCombo.setVisible (true);
         limModeCombo.setVisible (true);
+        invPolCombo.setVisible (true);
+        invStrCombo.setVisible (true);
         chaosFilterButton.setVisible (true);
         chaosFilterDisplay.setVisible (true);
         chaosDelayButton.setVisible (true);
         chaosDelayDisplay.setVisible (true);
 
-        invButton.setVisible (false);
+        altButton.setVisible (false);
         midiButton.setVisible (false);
         midiChannelDisplay.setVisible (false);
 
@@ -4806,8 +4866,10 @@ void DisperserAudioProcessorEditor::resized()
         modeOutCombo.setVisible (false);
         sumBusCombo.setVisible (false);
         limModeCombo.setVisible (false);
+        invPolCombo.setVisible (false);
+        invStrCombo.setVisible (false);
 
-        invButton.setVisible (true);
+        altButton.setVisible (true);
         midiButton.setVisible (true);
         midiChannelDisplay.setVisible (true);
     }
@@ -4821,20 +4883,20 @@ void DisperserAudioProcessorEditor::resized()
     const int toggleHitW = toggleVisualSide + 6;
 
     const int valueStartX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
-    const int invAnchorX = horizontalLayout.leftX;
+    const int altAnchorX = horizontalLayout.leftX;
     const int midiAnchorX = valueStartX;
 
-    int invBlockX = invAnchorX;
+    int altBlockX = altAnchorX;
     int midiBlockX = midiAnchorX;
 
-    const int midiMinX = juce::jmax (midiAnchorX, invBlockX + toggleHitW + kMinToggleBlocksGapPx);
+    const int midiMinX = juce::jmax (midiAnchorX, altBlockX + toggleHitW + kMinToggleBlocksGapPx);
     const int midiMaxX = buttonAreaX + buttonAreaW - toggleHitW;
     if (midiMinX <= midiMaxX)
         midiBlockX = juce::jlimit (midiMinX, midiMaxX, midiBlockX);
     else
         midiBlockX = midiMaxX;
 
-    invButton.setBounds (invBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
+    altButton.setBounds (altBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
     midiButton.setBounds (midiBlockX, verticalLayout.btnY, toggleHitW, verticalLayout.box);
 
     // Position invisible tooltip overlay on the MIDI label area
