@@ -34,6 +34,7 @@ private:
     void openChaosConfigPrompt (const char* amtParamId, const char* spdParamId, const juce::String& title);
     void openChaosFilterPrompt();
     void openChaosDelayPrompt();
+    void openMixSendPrompt();
     void setPromptOverlayActive (bool shouldBeActive);
 
     DisperserAudioProcessor& audioProcessor;
@@ -177,6 +178,49 @@ private:
 
     FilterBarComponent filterBar_;
 
+    // ── Dual dry/wet level bar (SEND mix mode) ──
+    class DualMixBarComponent : public juce::Component,
+                                public juce::SettableTooltipClient
+    {
+    public:
+        DualMixBarComponent() = default;
+        void setOwner (DisperserAudioProcessorEditor* o) { owner = o; }
+        void setScheme (const DISPScheme& s) { scheme = s; repaint(); }
+
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseMove (const juce::MouseEvent& e) override;
+
+        void updateFromProcessor();
+
+        float getDryLevel() const { return dryLevel_; }
+        float getWetLevel() const { return wetLevel_; }
+
+        enum DragTarget { None, DRY, WET };
+        DragTarget getLastTouched() const { return lastTouched_; }
+
+    private:
+        DisperserAudioProcessorEditor* owner = nullptr;
+        DISPScheme scheme {};
+
+        float dryLevel_ = 0.0f;
+        float wetLevel_ = 1.0f;
+
+        DragTarget currentDrag_ = None;
+        DragTarget lastTouched_ = WET;
+
+        static constexpr float kPad = 7.0f;
+        static constexpr int   kMarkerHitPx = 14;
+
+        juce::Rectangle<float> getInnerArea() const;
+        DragTarget hitTestMarker (juce::Point<float> p) const;
+        void  setLevelFromMouseX (float mouseX, DragTarget target);
+    };
+
+    DualMixBarComponent dualMixBar_;
+
     juce::ToggleButton altButton;
     juce::ToggleButton midiButton;
     juce::Label midiChannelDisplay;
@@ -194,6 +238,8 @@ private:
     juce::ComboBox limModeCombo;
     juce::ComboBox invPolCombo;
     juce::ComboBox invStrCombo;
+    juce::ComboBox mixModeCombo;
+    juce::ComboBox filterPosCombo;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -224,6 +270,8 @@ private:
     std::unique_ptr<ComboBoxAttachment> limModeAttachment;
     std::unique_ptr<ComboBoxAttachment> invPolAttachment;
     std::unique_ptr<ComboBoxAttachment> invStrAttachment;
+    std::unique_ptr<ComboBoxAttachment> mixModeAttachment;
+    std::unique_ptr<ComboBoxAttachment> filterPosAttachment;
 
     juce::ComponentBoundsConstrainer resizeConstrainer;
     std::unique_ptr<juce::ResizableCornerComponent> resizerCorner;

@@ -155,6 +155,10 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	invStrParam        = apvts.getRawParameterValue (kParamInvStr);
 	limThresholdParam = apvts.getRawParameterValue (kParamLimThreshold);
 	limModeParam      = apvts.getRawParameterValue (kParamLimMode);
+	mixModeParam   = apvts.getRawParameterValue (kParamMixMode);
+	dryLevelParam  = apvts.getRawParameterValue (kParamDryLevel);
+	wetLevelParam  = apvts.getRawParameterValue (kParamWetLevel);
+	filterPosParam = apvts.getRawParameterValue (kParamFilterPos);
 }
 
 DisperserAudioProcessor::~DisperserAudioProcessor()
@@ -269,19 +273,24 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	// Reset chaos state
 	chaosFilterEnabled_ = false;
 	chaosDelayEnabled_  = false;
-	chaosAmtD_ = 0.0f; chaosAmtF_ = 0.0f;
-	chaosDPhase_ = 0.0f; chaosDTarget_ = 0.0f; chaosDSmoothed_ = 0.0f;
-	chaosGPhase_ = 0.0f; chaosGTarget_ = 0.0f; chaosGSmoothed_ = 0.0f;
-	chaosFPhase_ = 0.0f; chaosFTarget_ = 0.0f; chaosFSmoothed_ = 0.0f;
+	chaosStereo_ = false;
+	chaosAmtD_ = 0.0f; chaosAmtNormD_ = 0.0f; chaosAmtF_ = 0.0f;
+	for (int c = 0; c < 2; ++c)
+	{
+		chaosDPrev_[c] = chaosDCurr_[c] = chaosDNext_[c] = 0.0f;
+		chaosDPhase_[c] = 0.0f; chaosDDriftPhase_[c] = 0.0f; chaosDDriftFreqHz_[c] = 0.0f; chaosDOut_[c] = 0.0f;
+		chaosGPrev_[c] = chaosGCurr_[c] = chaosGNext_[c] = 0.0f;
+		chaosGPhase_[c] = 0.0f; chaosGDriftPhase_[c] = 0.0f; chaosGDriftFreqHz_[c] = 0.0f; chaosGOut_[c] = 0.0f;
+	}
+	chaosFPrev_ = chaosFCurr_ = chaosFNext_ = 0.0f;
+	chaosFPhase_ = 0.0f; chaosFDriftPhase_ = 0.0f; chaosFDriftFreqHz_ = 0.0f;
+	chaosFOut_[0] = chaosFOut_[1] = 0.0f;
 	smoothedChaosFreqMaxOct_ = 0.0f;
 	smoothedChaosGainMaxDb_ = 0.0f;
 	smoothedChaosFilterMaxOct_ = 0.0f;
 	chaosParamSmoothCoeff_ = 0.999f;
 
 	// Precompute chaos smooth coefficients (sampleRate-dependent but constant between prepareToPlay)
-	cachedChaosDSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.030f));
-	cachedChaosGSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.015f));
-	cachedChaosFSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.060f));
 	cachedChaosParamSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.010f));
 
 	// Reset limiter state and precompute coefficients
@@ -557,6 +566,17 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	// ── MIX (dry/wet) ───────────────────────────────────────
 	const float mixValue = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (mixParam, kMixDefault));
+	const int   mixMode  = loadIntParamOrDefault (mixModeParam, kMixModeDefault);
+	const float dryLevel = (mixMode == 1) ? loadAtomicOrDefault (dryLevelParam, kDryLevelDefault) : 0.0f;
+	const float wetLevel = (mixMode == 1) ? loadAtomicOrDefault (wetLevelParam, kWetLevelDefault) : 0.0f;
+
+	// Filter / Tilt position
+	{
+		const int fltPos = loadIntParamOrDefault (filterPosParam, kFilterPosDefault);
+		// 0=F▼T▼  1=F▲T▲  2=F▲T▼  3=F▼T▲
+		filterPre_ = (fltPos == 1 || fltPos == 2);
+		tiltPre_   = (fltPos == 1 || fltPos == 3);
+	}
 
 	// ── TILT EQ parameter load ──
 	tiltDb_ = loadAtomicOrDefault (tiltParam, kTiltDefault);
@@ -573,8 +593,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	// ── Sum Bus (needed early for needsDryBlend) ────────────
 	const int sumBusVal  = juce::jlimit (0, 2, (int) sumBusParam->load());
 
-	// Save dry input for dry/wet blend (only when mix < 1 or sum bus active)
-	const bool needsDryBlend = (mixValue < 0.999f) || (sumBusVal != 0);
+	// Save dry input for dry/wet blend (only when mix < 1 or sum bus active or SEND mode)
+	const bool needsDryBlend = (mixValue < 0.999f) || (sumBusVal != 0) || (mixMode == 1);
 	if (needsDryBlend)
 	{
 		if (dryBuffer.getNumChannels() < numChannels || dryBuffer.getNumSamples() < numSamples)
@@ -655,12 +675,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			const float rawAmtD = loadAtomicOrDefault (chaosAmtParam, kChaosAmtDefault);
 			const float rawSpdD = loadAtomicOrDefault (chaosSpdParam, kChaosSpdDefault);
 			chaosAmtD_       = rawAmtD;
+			chaosAmtNormD_   = rawAmtD * 0.01f;
 			chaosShPeriodD_  = (float) currentSampleRate / rawSpdD;
-			const float amtNormD = rawAmtD * 0.01f;
-			chaosFreqMaxOct_ = amtNormD * 2.0f;   // ±2 oct at 100%
-			chaosGainMaxDb_  = amtNormD * 1.0f;    // ±1 dB at 100%
-			chaosDSmoothCoeff_ = cachedChaosDSmoothCoeff_;
-			chaosGSmoothCoeff_ = cachedChaosGSmoothCoeff_;
+			chaosFreqMaxOct_ = chaosAmtNormD_ * 2.0f;   // ±2 oct at 100%
+			chaosGainMaxDb_  = chaosAmtNormD_ * 1.0f;    // ±1 dB at 100%
 		}
 		else
 		{
@@ -676,7 +694,6 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			chaosShPeriodF_  = (float) currentSampleRate / rawSpdF;
 			const float amtNormF = rawAmtF * 0.01f;
 			chaosFilterMaxOct_ = amtNormF * 2.0f;  // ±2 oct at 100%
-			chaosFSmoothCoeff_ = cachedChaosFSmoothCoeff_;
 		}
 		else
 		{
@@ -692,6 +709,171 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		chaosGainMaxDb_ = 0.0f;
 		chaosFilterMaxOct_ = 0.0f;
 	}
+
+	chaosStereo_ = (style >= 1);
+
+	// ── Wet-signal HP/LP filter (PRE position — only runs if filterPre_) ──
+	if (filterPre_)
+	{
+		const bool hpOn = loadBoolParamOrDefault (filterHpOnParam, false);
+		const bool lpOn = loadBoolParamOrDefault (filterLpOnParam, false);
+
+		if (hpOn || lpOn)
+		{
+			const float targetHpFreq = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
+				loadAtomicOrDefault (filterHpFreqParam, kFilterHpFreqDefault));
+			const float targetLpFreq = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
+				loadAtomicOrDefault (filterLpFreqParam, kFilterLpFreqDefault));
+			const int hpSlope = juce::jlimit (kFilterSlopeMin, kFilterSlopeMax,
+				loadIntParamOrDefault (filterHpSlopeParam, kFilterSlopeDefault));
+			const int lpSlope = juce::jlimit (kFilterSlopeMin, kFilterSlopeMax,
+				loadIntParamOrDefault (filterLpSlopeParam, kFilterSlopeDefault));
+
+			const int numSections_hp = (hpSlope == 2) ? 2 : 1;
+			const int numSections_lp = (lpSlope == 2) ? 2 : 1;
+
+			for (int ch = 0; ch < numChannels; ++ch)
+			{
+				float* wet = buffer.getWritePointer (ch);
+				auto& fs = wetFilterState_[ch < 2 ? ch : 0];
+
+				for (int n = 0; n < numSamples; ++n)
+				{
+					if (ch == 0)
+					{
+						smoothedFilterHpFreq_ = smoothedFilterHpFreq_ * kGainSmoothCoeff
+							+ targetHpFreq * (1.0f - kGainSmoothCoeff);
+						smoothedFilterLpFreq_ = smoothedFilterLpFreq_ * kGainSmoothCoeff
+							+ targetLpFreq * (1.0f - kGainSmoothCoeff);
+
+						if (chaosFilterEnabled_) advanceChaosF();
+
+						--filterCoeffCountdown_;
+						if (filterCoeffCountdown_ <= 0)
+						{
+							filterCoeffCountdown_ = kFilterCoeffUpdateInterval;
+							if (chaosFilterEnabled_ && chaosAmtF_ > 0.01f)
+							{
+								const float sHp = smoothedFilterHpFreq_;
+								const float sLp = smoothedFilterLpFreq_;
+								const float hpBase = hpOn ? sHp : kFilterFreqMin;
+								const float lpBase = lpOn ? sLp : kFilterFreqMax;
+
+								// L channel coefficients
+								const float octL = chaosFOut_[0] * smoothedChaosFilterMaxOct_;
+								const float multL = std::exp2 (octL);
+								smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, hpBase * multL);
+								smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, lpBase * multL);
+								updateFilterCoeffs (true, true);
+
+								if (chaosStereo_)
+								{
+									auto hpL0 = hpCoeffs_[0]; auto hpL1 = hpCoeffs_[1];
+									auto lpL0 = lpCoeffs_[0]; auto lpL1 = lpCoeffs_[1];
+
+									const float octR = chaosFOut_[1] * smoothedChaosFilterMaxOct_;
+									const float multR = std::exp2 (octR);
+									smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, hpBase * multR);
+									smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, lpBase * multR);
+									updateFilterCoeffs (true, true);
+
+									hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+									lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
+									hpCoeffs_[0] = hpL0; hpCoeffs_[1] = hpL1;
+									lpCoeffs_[0] = lpL0; lpCoeffs_[1] = lpL1;
+								}
+								else
+								{
+									hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+									lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
+								}
+
+								smoothedFilterHpFreq_ = sHp;
+								smoothedFilterLpFreq_ = sLp;
+							}
+							else
+							{
+								updateFilterCoeffs (false, false);
+								hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+								lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
+							}
+						}
+					}
+
+					float x = wet[n];
+					const auto& hpC = (ch == 0) ? hpCoeffs_ : hpCoeffsR_;
+					const auto& lpC = (ch == 0) ? lpCoeffs_ : lpCoeffsR_;
+
+					if (hpOn)
+						for (int s = 0; s < numSections_hp; ++s)
+							x = processBiquad (hpC[s], fs.hp[s], x);
+
+					if (lpOn)
+						for (int s = 0; s < numSections_lp; ++s)
+							x = processBiquad (lpC[s], fs.lp[s], x);
+
+					wet[n] = x;
+				}
+			}
+		}
+		else if (chaosFilterEnabled_)
+		{
+			for (int n = 0; n < numSamples; ++n)
+			{
+				advanceChaosF();
+			}
+		}
+	}
+
+	// ── TILT filter lambda (1-pole shelving, pivot 1 kHz) ──
+	auto applyTilt = [&]()
+	{
+		if (std::abs (tiltDb_) > 0.05f)
+		{
+			if (std::abs (tiltDb_ - lastTiltDb_) > 0.02f)
+			{
+				lastTiltDb_ = tiltDb_;
+				const double pivot = 1000.0;
+				const double octToNy = std::log2 ((currentSampleRate * 0.5) / pivot);
+				const double gainNyDb = static_cast<double> (tiltDb_) * octToNy;
+				const double gNy = std::pow (10.0, gainNyDb / 20.0);
+				const double wc = 2.0 * currentSampleRate
+				                * std::tan (juce::MathConstants<double>::pi * pivot / currentSampleRate);
+				const double K = wc / (2.0 * currentSampleRate);
+				const double g = std::sqrt (gNy);
+				const double norm = 1.0 / (1.0 + K * g);
+				tiltTargetB0_ = static_cast<float> ((g + K) * norm);
+				tiltTargetB1_ = static_cast<float> ((K - g) * norm);
+				tiltTargetA1_ = static_cast<float> ((K * g - 1.0) * norm);
+			}
+
+			const float sc = tiltSmoothSc_;
+			tiltB0_ += (tiltTargetB0_ - tiltB0_) * sc;
+			tiltB1_ += (tiltTargetB1_ - tiltB1_) * sc;
+			tiltA1_ += (tiltTargetA1_ - tiltA1_) * sc;
+
+			for (int ch = 0; ch < juce::jmin (numChannels, 2); ++ch)
+			{
+				float* data = buffer.getWritePointer (ch);
+				for (int n = 0; n < numSamples; ++n)
+				{
+					const float x = data[n];
+					const float y = tiltB0_ * x + tiltState_[ch];
+					tiltState_[ch] = tiltB1_ * x - tiltA1_ * y;
+					data[n] = y;
+				}
+			}
+		}
+		else if (std::abs (lastTiltDb_) > 0.05f)
+		{
+			lastTiltDb_ = 0.0f;
+			tiltB0_ = 1.0f; tiltB1_ = 0.0f; tiltA1_ = 0.0f;
+			tiltTargetB0_ = 1.0f; tiltTargetB1_ = 0.0f; tiltTargetA1_ = 0.0f;
+			tiltState_[0] = tiltState_[1] = 0.0f;
+		}
+	};
+
+	if (tiltPre_) applyTilt();
 
 	const bool freqConverged = std::abs (smoothedFreqValue - targetFreq) < 0.01f;
 
@@ -783,7 +965,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			advanceChaosD();
 			if (chaosAmtD_ > 0.01f)
 			{
-				const float oct = chaosDSmoothed_ * smoothedChaosFreqMaxOct_;
+				const float oct = chaosDOut_[0] * smoothedChaosFreqMaxOct_;
 				smoothedFreq = juce::jlimit (20.0f, 20000.0f, smoothedFreq * std::exp2 (oct));
 			}
 		}
@@ -952,21 +1134,32 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			}
 		}
 
-		// Chaos D gain modulation (applied per-sample after allpass)
+		// Chaos D gain modulation (per-channel, applied per-sample after allpass)
 		if (chaosDelayEnabled_ && chaosAmtD_ > 0.01f)
 		{
-			const float gainDb  = chaosGSmoothed_ * smoothedChaosGainMaxDb_;
-			const float gainLin = std::exp2 (gainDb * 0.16609640474f);  // log2(10)/20
-			ch0[n] *= gainLin;
+			{
+				const float gainDb  = chaosGOut_[0] * smoothedChaosGainMaxDb_;
+				const float ex = gainDb * 0.16609640474f;
+				const float exln2 = ex * 0.6931472f;
+				const float gainLin = 1.0f + exln2 * (1.0f + exln2 * 0.5f);
+				ch0[n] *= gainLin;
+			}
 			if (hasStereo)
+			{
+				const float gainDb  = chaosGOut_[1] * smoothedChaosGainMaxDb_;
+				const float ex = gainDb * 0.16609640474f;
+				const float exln2 = ex * 0.6931472f;
+				const float gainLin = 1.0f + exln2 * (1.0f + exln2 * 0.5f);
 				ch1[n] *= gainLin;
+			}
 		}
 	}
 	} // end else (slow path)
 
 	// (ALT coefficient alternation is applied inside the allpass loops)
 
-	// ── Wet-signal HP/LP filter (applied before dry/wet blend) ──────────
+	// ── Wet-signal HP/LP filter (POST position — only runs if !filterPre_) ──
+	if (! filterPre_)
 	{
 		const bool hpOn = loadBoolParamOrDefault (filterHpOnParam, false);
 		const bool lpOn = loadBoolParamOrDefault (filterLpOnParam, false);
@@ -1008,34 +1201,63 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 							filterCoeffCountdown_ = kFilterCoeffUpdateInterval;
 							if (chaosFilterEnabled_ && chaosAmtF_ > 0.01f)
 							{
-								const float oct = chaosFSmoothed_ * smoothedChaosFilterMaxOct_;
-								const float mult = std::exp2 (oct);
 								const float sHp = smoothedFilterHpFreq_;
 								const float sLp = smoothedFilterLpFreq_;
-								smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
-									(hpOn ? sHp : kFilterFreqMin) * mult);
-								smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax,
-									(lpOn ? sLp : kFilterFreqMax) * mult);
+								const float hpBase = hpOn ? sHp : kFilterFreqMin;
+								const float lpBase = lpOn ? sLp : kFilterFreqMax;
+
+								// L channel coefficients
+								const float octL = chaosFOut_[0] * smoothedChaosFilterMaxOct_;
+								const float multL = std::exp2 (octL);
+								smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, hpBase * multL);
+								smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, lpBase * multL);
 								updateFilterCoeffs (true, true);
+
+								if (chaosStereo_)
+								{
+									auto hpL0 = hpCoeffs_[0]; auto hpL1 = hpCoeffs_[1];
+									auto lpL0 = lpCoeffs_[0]; auto lpL1 = lpCoeffs_[1];
+
+									const float octR = chaosFOut_[1] * smoothedChaosFilterMaxOct_;
+									const float multR = std::exp2 (octR);
+									smoothedFilterHpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, hpBase * multR);
+									smoothedFilterLpFreq_ = juce::jlimit (kFilterFreqMin, kFilterFreqMax, lpBase * multR);
+									updateFilterCoeffs (true, true);
+
+									hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+									lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
+									hpCoeffs_[0] = hpL0; hpCoeffs_[1] = hpL1;
+									lpCoeffs_[0] = lpL0; lpCoeffs_[1] = lpL1;
+								}
+								else
+								{
+									hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+									lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
+								}
+
 								smoothedFilterHpFreq_ = sHp;
 								smoothedFilterLpFreq_ = sLp;
 							}
 							else
 							{
 								updateFilterCoeffs (false, false);
+								hpCoeffsR_[0] = hpCoeffs_[0]; hpCoeffsR_[1] = hpCoeffs_[1];
+								lpCoeffsR_[0] = lpCoeffs_[0]; lpCoeffsR_[1] = lpCoeffs_[1];
 							}
 						}
 					}
 
 					float x = wet[n];
+					const auto& hpC = (ch == 0) ? hpCoeffs_ : hpCoeffsR_;
+					const auto& lpC = (ch == 0) ? lpCoeffs_ : lpCoeffsR_;
 
 					if (hpOn)
 						for (int s = 0; s < numSections_hp; ++s)
-							x = processBiquad (hpCoeffs_[s], fs.hp[s], x);
+							x = processBiquad (hpC[s], fs.hp[s], x);
 
 					if (lpOn)
 						for (int s = 0; s < numSections_lp; ++s)
-							x = processBiquad (lpCoeffs_[s], fs.lp[s], x);
+							x = processBiquad (lpC[s], fs.lp[s], x);
 
 					wet[n] = x;
 				}
@@ -1051,50 +1273,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		}
 	}
 
-	// ── TILT filter (1-pole shelving, pivot 1 kHz) ──
-	if (std::abs (tiltDb_) > 0.05f)
-	{
-		if (std::abs (tiltDb_ - lastTiltDb_) > 0.02f)
-		{
-			lastTiltDb_ = tiltDb_;
-			const double pivot = 1000.0;
-			const double octToNy = std::log2 ((currentSampleRate * 0.5) / pivot);
-			const double gainNyDb = static_cast<double> (tiltDb_) * octToNy;
-			const double gNy = std::pow (10.0, gainNyDb / 20.0);
-			const double wc = 2.0 * currentSampleRate
-			                * std::tan (juce::MathConstants<double>::pi * pivot / currentSampleRate);
-			const double K = wc / (2.0 * currentSampleRate);
-			const double g = std::sqrt (gNy);
-			const double norm = 1.0 / (1.0 + K * g);
-			tiltTargetB0_ = static_cast<float> ((g + K) * norm);
-			tiltTargetB1_ = static_cast<float> ((K - g) * norm);
-			tiltTargetA1_ = static_cast<float> ((K * g - 1.0) * norm);
-		}
-
-		const float sc = tiltSmoothSc_;
-		tiltB0_ += (tiltTargetB0_ - tiltB0_) * sc;
-		tiltB1_ += (tiltTargetB1_ - tiltB1_) * sc;
-		tiltA1_ += (tiltTargetA1_ - tiltA1_) * sc;
-
-		for (int ch = 0; ch < juce::jmin (numChannels, 2); ++ch)
-		{
-			float* data = buffer.getWritePointer (ch);
-			for (int n = 0; n < numSamples; ++n)
-			{
-				const float x = data[n];
-				const float y = tiltB0_ * x + tiltState_[ch];
-				tiltState_[ch] = tiltB1_ * x - tiltA1_ * y;
-				data[n] = y;
-			}
-		}
-	}
-	else if (std::abs (lastTiltDb_) > 0.05f)
-	{
-		lastTiltDb_ = 0.0f;
-		tiltB0_ = 1.0f; tiltB1_ = 0.0f; tiltA1_ = 0.0f;
-		tiltTargetB0_ = 1.0f; tiltTargetB1_ = 0.0f; tiltTargetA1_ = 0.0f;
-		tiltState_[0] = tiltState_[1] = 0.0f;
-	}
+	// ── TILT filter (POST position) ──
+	if (!tiltPre_) applyTilt();
 
 	// ── Mode Out: M/S decode wet signal ──
 	if (modeOutVal > 0 && numChannels >= 2)
@@ -1143,6 +1323,19 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	}
 
 	// ── Per-sample smoothed Input/Output/Mix + Dry/Wet blend (fused loop) ──
+	// Compute dry/wet gain targets based on mix mode
+	float dryGainTarget, wetGainTarget;
+	if (mixMode == 0) // INSERT: classic crossfade
+	{
+		dryGainTarget = 1.0f - mixValue;
+		wetGainTarget = mixValue;
+	}
+	else // SEND: independent dry + wet levels
+	{
+		dryGainTarget = dryLevel;
+		wetGainTarget = wetLevel;
+	}
+
 	if (needsDryBlend)
 	{
 		if (sumBusVal == 0 || numChannels < 2)
@@ -1160,7 +1353,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 					const float dryS = dry[n];
 					const float wetS = wet[n] * smoothedInputGain * smoothedOutputGain;
-					wet[n] = dryS + smoothedMix * (wetS - dryS);
+					if (mixMode == 0)
+						wet[n] = dryS + smoothedMix * (wetS - dryS);
+					else
+						wet[n] = dryS * dryGainTarget + wetS * wetGainTarget;
 				}
 			}
 		}
@@ -1177,10 +1373,12 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
 				smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
 
-				const float dL = dryL[n] * (1.0f - smoothedMix);
-				const float dR = dryR[n] * (1.0f - smoothedMix);
-				const float wL = outL[n] * smoothedInputGain * smoothedOutputGain * smoothedMix;
-				const float wR = outR[n] * smoothedInputGain * smoothedOutputGain * smoothedMix;
+				const float dG = (mixMode == 0) ? (1.0f - smoothedMix) : dryGainTarget;
+				const float wG = (mixMode == 0) ? smoothedMix : wetGainTarget;
+				const float dL = dryL[n] * dG;
+				const float dR = dryR[n] * dG;
+				const float wL = outL[n] * smoothedInputGain * smoothedOutputGain * wG;
+				const float wR = outR[n] * smoothedInputGain * smoothedOutputGain * wG;
 
 				if (sumBusVal == 1) // →M
 				{
@@ -1402,6 +1600,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 		juce::NormalisableRange<float> (kLimThresholdMin, kLimThresholdMax, 0.1f), kLimThresholdDefault));
 	params.push_back (std::make_unique<juce::AudioParameterChoice> (
 		kParamLimMode, "Limiter Mode", juce::StringArray { "NONE", "WET", "GLOBAL" }, kLimModeDefault));
+
+	// Mix Mode (INSERT / SEND) + Dry/Wet levels for SEND mode
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamMixMode, "Mix Mode",
+		juce::StringArray { "INSERT", "SEND" }, kMixModeDefault));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamDryLevel, "Dry Level",
+		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kDryLevelDefault));
+	params.push_back (std::make_unique<juce::AudioParameterFloat> (
+		kParamWetLevel, "Wet Level",
+		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kWetLevelDefault));
+
+	// Filter / Tilt position (PRE / POST effect)
+	params.push_back (std::make_unique<juce::AudioParameterChoice> (
+		kParamFilterPos, "Filter Position",
+		juce::StringArray { juce::String::fromUTF8 (u8"F\u25bc T\u25bc"),
+		                    juce::String::fromUTF8 (u8"F\u25b2 T\u25b2"),
+		                    juce::String::fromUTF8 (u8"F\u25b2 T\u25bc"),
+		                    juce::String::fromUTF8 (u8"F\u25bc T\u25b2") },
+		kFilterPosDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiWidth, "UI Width", 360, 1600, 360));
 	params.push_back (std::make_unique<juce::AudioParameterInt> (kParamUiHeight, "UI Height", 240, 1200, 360));

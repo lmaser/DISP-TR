@@ -134,9 +134,9 @@ Micro-variation engine that adds organic randomness to the effect. Two independe
 Each chaos target has its own toggle and shares two global controls:
 
 - **AMOUNT (0–100%)**: Modulation depth — how far from the base value the parameter can drift. Default: 50%.
-- **SPEED (0.01–100 Hz)**: Sample-and-hold rate — how often a new random target is picked. Default: 5 Hz.
+- **SPEED (0.01–100 Hz)**: Random target rate — how often a new random value is generated. Default: 5 Hz.
 
-Uses exponential smoothing between random targets for glitch-free transitions.
+Uses Hermite cubic interpolation (Catmull-Rom) between random targets with a per-channel quadrature drift LFO for organic, stereo-decorrelated movement.
 
 ### LIM THRESHOLD (−36 to 0 dB)
 
@@ -166,7 +166,7 @@ Stereo-linked gain reduction ensures consistent imaging.
 - **Smoothing**: EMA for frequency (80 ms tau), linear SmoothedValue for stages (60 ms), shape (50 ms), and feedback (50 ms).
 - **Fast path**: When all parameters are converged and no crossfade is active, a tight inner loop runs without per-sample smoothing or coefficient checks.
 - **Series crossfade**: 20 ms linear crossfade between old and new series topology on changes.
-- **Chaos**: Sample-and-hold random modulation with exponential smoothing. Per-block coefficient precomputation avoids per-sample `std::exp` calls.
+- **Chaos**: Hermite cubic interpolation between random targets with per-channel quadrature drift LFO. Per-block coefficient precomputation avoids per-sample `std::exp` calls.
 - **MIDI**: Note-to-frequency via `440 * 2^((note-69)/12)`. Velocity-dependent glide via EMA time constant.
 - **Wet filter**: Biquad HP/LP on the wet signal. Transposed Direct Form II. Coefficients updated once per block (channel 0), shared across channels.
 - **Fast dB→gain**: `std::exp2(x * 0.166)` approximation replacing `std::pow(10, x/20)` for input/output gain conversion.
@@ -179,7 +179,7 @@ Stereo-linked gain reduction ensures consistent imaging.
 
 ### v1.4
 - Feedback is now bipolar (−100% to +100%). Negative feedback inverts the feedback polarity, producing a different resonant character (notch-to-peak inversion). Uses sign-preserving smoothstep mapping.
-- Added CHAOS engine with two independent targets: CHAOS F (filter frequency modulation) and CHAOS D (disperser frequency modulation). Sample-and-hold with exponential smoothing.
+- Added CHAOS engine with two independent targets: CHAOS F (filter frequency modulation) and CHAOS D (disperser frequency modulation). Hermite cubic interpolation with quadrature drift LFO.
 - Added HP/LP filter section on the wet signal path with configurable frequency, slope (6/12/24 dB/oct), and per-filter enable/disable.
 - Replaced `std::pow(10, x/20)` with `std::exp2(x * 0.166)` for faster dB-to-gain conversion.
 - Precomputed chaos smooth coefficients in `prepareToPlay`, eliminating 4× `std::exp` calls per audio block.

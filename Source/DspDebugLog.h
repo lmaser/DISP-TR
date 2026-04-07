@@ -25,7 +25,7 @@
 #include <cstdint>
 
 #ifndef DISPTR_DSP_DEBUG_LOG
- #define DISPTR_DSP_DEBUG_LOG 1
+ #define DISPTR_DSP_DEBUG_LOG 0
 #endif
 
 #if DISPTR_DSP_DEBUG_LOG
