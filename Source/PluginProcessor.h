@@ -243,7 +243,7 @@ private:
 	float lastCoeffFreqR  = -1.0f;
 	int coeffUpdateCountdown = 0;
 
-	// ── Feedback ──
+	// Feedback
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> feedbackSmoothed;
 	static constexpr double kFeedbackSmoothingSeconds = 0.05;
 	float feedbackLastL = 0.0f;
@@ -255,7 +255,7 @@ private:
 	int seriesXfadeTotalSamples = 0;
 	int previousSeries = kSeriesDefault;
 
-	// ── MIDI note tracking ──
+	// MIDI note tracking
 	std::atomic<float> currentMidiFrequency { 0.0f };
 	std::atomic<int>   lastMidiNote { -1 };
 	std::atomic<int>   lastMidiVelocity { 127 };
@@ -263,14 +263,18 @@ private:
 
 	double currentSampleRate = 44100.0;
 
-	// ── Input / Output / Mix gain smoothing (same as ECHO-TR) ──
+	// Input / Output / Mix gain smoothing (same as ECHO-TR)
 	float smoothedInputGain = 1.0f;
 	float smoothedOutputGain = 1.0f;
 	float smoothedMix = 1.0f;
+	float smoothedDryLevel = kDryLevelDefault;
+	float smoothedWetLevel = kWetLevelDefault;
+	float smoothedPan = kPanDefault;
+	float smoothedLimThreshold = 1.0f;
 	bool  filterPre_  = false;
 	bool  tiltPre_    = false;
 
-	// ── Tilt EQ (1-pole shelving, pivot 1 kHz) ──
+	// Tilt EQ (1-pole shelving, pivot 1 kHz)
 	float tiltDb_        = 0.0f;
 	float tiltB0_ = 1.0f, tiltB1_ = 0.0f, tiltA1_ = 0.0f;
 	float tiltTargetB0_ = 1.0f, tiltTargetB1_ = 0.0f, tiltTargetA1_ = 0.0f;
@@ -282,7 +286,7 @@ private:
 	juce::AudioBuffer<float> dryBuffer;
 
 public:
-	// ── Wet filter (HP + LP) ──
+	// Wet filter (HP + LP)
 	struct WetFilterBiquadCoeffs { float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f; };
 	struct WetFilterBiquadState  { float z1 = 0.0f, z2 = 0.0f; };
 private:
@@ -352,9 +356,6 @@ private:
 	std::atomic<float>* filterPosParam = nullptr;
 
 	std::atomic<float>* panParam       = nullptr;
-	float lastPan_      = -1.0f;
-	float lastPanLeft_  = 1.0f;
-	float lastPanRight_ = 1.0f;
 
 	std::atomic<float>* uiWidthParam = nullptr;
 	std::atomic<float>* uiHeightParam = nullptr;
@@ -373,7 +374,7 @@ private:
 		std::atomic<juce::uint32> { juce::Colours::black.getARGB() }
 	};
 
-	// ── Chaos state (Hermite + Drift, per-channel D/G, quadrature F) ──
+	// Chaos state (Hermite + Drift, per-channel D/G, quadrature F)
 	bool  chaosFilterEnabled_ = false;
 	bool  chaosDelayEnabled_  = false;
 	bool  chaosStereo_        = false;   // true when style >= 1 (per-channel G, quadrature F)
@@ -420,7 +421,7 @@ private:
 	float chaosFCurr_            = 0.0f;
 	float chaosFNext_            = 0.0f;
 	float chaosFPhase_           = 0.0f;
-	float chaosFDriftPhase_      = 0.0f;   // single phase; R = +90° offset
+	float chaosFDriftPhase_      = 0.0f;   // single phase; R = +90 deg offset
 	float chaosFDriftFreqHz_     = 0.0f;
 	float chaosFOut_[2]          = {};     // [0]=L, [1]=R (quadrature when stereo)
 	juce::Random chaosFRng_;
@@ -565,7 +566,7 @@ private:
 		const float peakL = std::abs (sampleL);
 		const float peakR = std::abs (sampleR);
 
-		// Stage 1 — leveler (2 ms attack, 10 ms release)
+		// Stage 1 - leveler (2 ms attack, 10 ms release)
 		for (int ch = 0; ch < 2; ++ch)
 		{
 			const float p = (ch == 0) ? peakL : peakR;
@@ -576,7 +577,7 @@ private:
 			if (limEnv1_[ch] < kLimFloor) limEnv1_[ch] = kLimFloor;
 		}
 
-		// Stage 2 — brickwall (instant attack, 100 ms release)
+		// Stage 2 - brickwall (instant attack, 100 ms release)
 		for (int ch = 0; ch < 2; ++ch)
 		{
 			const float p = (ch == 0) ? peakL : peakR;

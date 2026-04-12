@@ -4,187 +4,298 @@
 
 <img width="446" height="672" alt="image" src="https://github.com/user-attachments/assets/a162fb48-0e8a-4d76-b9ad-70e4f7a08289" />
 
-
 <br/><br/>
 
-DISP-TR is a phase-dispersion audio effect built on cascaded all-pass filters.  
-It reshapes transients and phase response without classic EQ-style magnitude boosts/cuts, creating tighter, softer, or more smeared attack behavior depending on settings.
+DISP-TR is a phase-dispersion audio effect built on cascaded all-pass filters.
+It reshapes transients and phase relationships without classic EQ-style magnitude boosts or cuts, so the sound can become tighter, softer, wider, or more smeared while staying recognizably tied to the source.
 
 ## Concept
 
-DISP-TR treats phase rotation as the primary creative tool. By stacking all-pass stages in series chains with adjustable frequency distribution, it produces effects ranging from subtle transient reshaping to extreme spectral smearing — all without altering the magnitude spectrum.
+DISP-TR treats phase rotation as the primary creative tool.
+By stacking all-pass stages in series, spreading their center frequencies, and feeding the network back into itself, it can move from subtle transient contouring to resonant, spectral-smear effects without behaving like a conventional EQ, chorus, or delay.
+
+The core idea is:
+- `FREQUENCY` chooses the center of the phase action
+- `MOD` scales that center frequency
+- `STAGES` and `SERIES` increase complexity and depth
+- `SHAPE` spreads the stage distribution around the center
+- `FEEDBACK` adds resonance and character
 
 ## Interface
 
-DISP-TR uses a text-based UI with horizontal bar sliders. All controls are visible at once — no pages, tabs, or hidden menus.
+DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, and numeric popup entry.
 
-- **Bar sliders**: Click and drag horizontally. Right-click for numeric entry.
-- **Toggle buttons**: INV (invert), MD (MIDI). Click to enable/disable.
-- **Collapsible INPUT/OUTPUT/MIX section**: Click the toggle bar (triangle) at the top of the slider area to swap between main parameters and the INPUT, OUTPUT, MIX controls. The toggle bar stays fixed in place; only the arrow direction changes. State persists across sessions and preset changes.
-- **Filter bar**: Visible in the INPUT/OUTPUT/MIX section. Click to open the HP/LP filter configuration prompt with frequency, slope, and enable/disable controls for each filter.
-- **Gear icon** (top-right): Opens the info popup with version, credits, and a link to Graphics settings.
-- **Graphics popup**: Toggle CRT post-processing effect and switch between default/custom colour palettes.
+- **Bar sliders**: Click and drag horizontally. Right-click the value area for numeric entry when available.
+- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FEEDBACK`, `STAGES`, `SERIES`, `SHAPE`, `STYLE`, plus the `ALT` and `MD` toggles.
+- **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM THRESHOLD`, filter controls, routing/mode combos, invert options, and chaos toggles.
+- **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
+- **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
+- **MIDI channel prompt**: Right-click the MIDI channel legend when `MD` is enabled to choose omni or a fixed channel.
+- **Gear icon**: Opens the info popup with version, credits, and access to graphics settings.
+- **Graphics popup**: Controls CRT tail/post-processing and colour palette options.
 - **Resize**: Drag the bottom-right corner. Size persists across sessions.
 
-The value column to the right of each slider shows the current state in context:
-- FREQUENCY shows Hz (or MIDI note name when MIDI is active).
-- MOD shows the frequency multiplier.
-- FEEDBACK shows percentage.
-- STAGES shows the number of active all-pass stages.
-- SERIES shows the number of cascaded chains.
-- SHAPE shows the distribution percentage.
-- STYLE shows the stereo mode (MONO, STEREO, WIDE, or DUAL).
-- MIX shows dry/wet percentage.
+The UI is not paged, but it is stateful: the editor remembers size, palette, CRT setting, MIDI channel, and whether the IO section is expanded.
 
 ## Parameters
 
-### FREQUENCY (20–20 000 Hz)
+### STAGES (0-128)
 
-Main frequency focus for phase redistribution.  
-Low values push the dispersion character toward the low end; high values move it upward.  
-Smoothed via EMA (80 ms time constant). When MIDI is active, frequency is overridden by the incoming MIDI note.
+Number of first-order all-pass stages in each chain.
+Higher values increase phase complexity and effect intensity.
+Smoothed to keep automation and live edits stable.
 
-### MOD (0.25x–4.0x)
+### SERIES (1-4)
 
-Frequency multiplier. The slider range 0–1 maps non-linearly:
-- Left half (0–0.5): 0.25x–1.0x (sub-octave detuning)
-- Right half (0.5–1.0): 1.0x–4.0x (harmonic multiplication)
+Number of cascaded stage chains.
+Each extra series block deepens the effect.
+Series changes use a short crossfade to avoid clicks.
 
-Center position (0.5) = 1.0x (no modification).
+### FREQUENCY (20-20000 Hz)
 
-### FEEDBACK (−100 to +100%)
+Main center frequency for the dispersion network.
+Low values concentrate the effect toward the low end; high values move it upward.
+When `MD` is active, MIDI note tracking overrides the slider target.
 
-Feeds the all-pass chain output back into its input, creating resonant peaks. Negative values invert the feedback polarity, producing a different set of resonant frequencies (notch-to-peak inversion).  
-Uses sign-preserving bipolar smoothstep mapping for musical control: gentle at low values, increasingly intense toward the extremes.  
-Smoothed linearly (50 ms time constant).
+### MOD (0.25x-4.0x)
 
-### STAGES (0–128)
+Frequency multiplier for the disperser center.
+The control is non-linear around `1.0x`, so it gives useful low-ratio and high-ratio ranges without feeling cramped.
 
-Number of all-pass stages used in each series chain.  
-Higher values increase phase complexity and effect intensity.  
-Smoothed linearly (60 ms time constant) for artifact-free transitions during automation.
+### SHAPE (0-100%)
 
-### SERIES (1–4)
+Controls how far the per-stage frequencies spread around the center frequency.
 
-Number of cascaded chains.  
-Each chain is a full copy of the stage network. Higher values deepen the overall dispersion behavior.  
-Series changes use a 20 ms crossfade to avoid clicks.
+- `0%`: stages cluster tightly around the center
+- Higher values: stages fan outward for a broader, more complex phase pattern
 
-### SHAPE (0–100%)
+### FEEDBACK (-100 to +100%)
 
-Controls how spread or warped the per-stage frequency distribution is around FREQUENCY.  
-At 0% all stages share the same coefficient. Higher values fan the stages out across the spectrum.  
-Smoothed linearly (50 ms time constant).
+Feeds the all-pass output back into the input.
+
+- Positive values emphasize one resonant character
+- Negative values invert the feedback polarity and produce a different resonant profile
+
+This is a bipolar, sign-preserving control and is smoothed for live adjustment.
 
 ### STYLE (MONO / STEREO / WIDE / DUAL)
 
-Controls the stereo processing mode:
-- **MONO**: Only the left channel is processed; the result is copied to the right channel.
-- **STEREO** (default): Both channels are processed independently with identical coefficients.
-- **WIDE**: Complementary dispersion — R channel uses negated allpass coefficients (−a), giving an opposite group-delay profile while remaining allpass (flat magnitude, stable). Cross-feedback between channels creates a dimension-expansion effect.
-- **DUAL**: R channel processes at half the center frequency (×0.5) with its own coefficient set. Independent feedback per channel — no cross-feed. Produces two distinct dispersion characters, one per side.
+Stereo processing mode for the wet disperser path.
 
-### MIX (0–100%)
+- **MONO**: Processes one side and mirrors the result
+- **STEREO**: Standard dual-channel processing with matching coefficients
+- **WIDE**: Uses complementary coefficient polarity between channels for a broader image
+- **DUAL**: Uses an alternate right-channel coefficient set for a more split stereo character
 
-Dry/wet blend. At 100% the output is fully processed (wet). At 0% the signal passes through unaffected (dry).  
-Default is 100%.
+### ALT
 
-### INPUT (−100 to 0 dB)
+Alternates the sign of every other stage coefficient.
+This changes the internal phase pattern of the network and gives a different transient and resonance feel without changing the basic control set.
 
-Pre-processing gain. Controls how much signal enters the all-pass chain.  
-Applied to the wet signal only — the dry signal is unaffected.
+### INPUT (-100 to 0 dB)
 
-### OUTPUT (−100 to +24 dB)
+Wet-path input gain into the disperser.
+This affects the processed signal only, not the dry branch.
 
-Post-processing gain. Applied to the wet signal only.
+### OUTPUT (-100 to +24 dB)
+
+Wet-path output gain after the disperser.
+This affects the processed signal only.
+
+### TILT (-6 to +6 dB)
+
+One-knob tilt EQ on the wet path, pivoted around 1 kHz.
+Negative values darken the wet signal; positive values brighten it.
+
+### PAN (0-100%)
+
+Global equal-power stereo pan after the wet/dry blend.
+
+- `0%` = left
+- `50%` = center
+- `100%` = right
+
+### MIX (0-100%)
+
+In `INSERT` mode, this is the standard dry/wet blend:
+
+- `0%` = fully dry
+- `100%` = fully wet
+
+### MIX MODE (INSERT / SEND)
+
+Determines how the final blend is controlled.
+
+- **INSERT**: Uses the single `MIX` control
+- **SEND**: Uses independent `DRY LEVEL` and `WET LEVEL` gains
+
+### DRY LEVEL / WET LEVEL (SEND mode)
+
+Available when `MIX MODE` is `SEND`.
+These set the dry and wet contribution independently instead of using one crossfade-style mix knob.
 
 ### HP/LP FILTER
 
-High-pass and low-pass filters applied to the wet signal, accessible via the filter bar in the IO section.
+Wet-path high-pass and low-pass filters, configured from the filter popup.
 
-- **HP FREQ (20–20 000 Hz)**: High-pass cutoff frequency.
-- **LP FREQ (20–20 000 Hz)**: Low-pass cutoff frequency.
-- **HP SLOPE (6 dB / 12 dB / 24 dB)**: High-pass filter slope.
-- **LP SLOPE (6 dB / 12 dB / 24 dB)**: Low-pass filter slope.
-- **HP / LP toggles**: Enable or disable each filter independently. Click the HP/LP label or its checkbox to toggle.
+- **HP FREQ / LP FREQ**: 20-20000 Hz
+- **HP SLOPE / LP SLOPE**: 6 dB, 12 dB, or 24 dB per octave
+- **HP / LP toggles**: enable or disable each filter independently
 
-Slope modes:
-- **6 dB/oct**: Single-pole filter.
-- **12 dB/oct**: Second-order Butterworth.
-- **24 dB/oct**: Two cascaded second-order Butterworth stages.
+### FILTER POS
 
-### INV (Invert)
+Chooses whether the wet HP/LP filter block and the tilt EQ run before or after the disperser core.
 
-Inverts output polarity (multiplies signal by −1).
+- **F post / T post**
+- **F pre / T pre**
+- **F pre / T post**
+- **F post / T pre**
+
+This is useful because filtering before the all-pass network changes what excites the disperser, while filtering after it shapes the already-dispersed result.
+
+### MODE IN / MODE OUT / SUM BUS
+
+Wet-path routing and mid/side handling controls in the IO view.
+
+- **MODE IN**: `L+R`, `MID`, `SIDE`
+- **MODE OUT**: `L+R`, `MID`, `SIDE`
+- **SUM BUS**: `ST`, `->M`, `->S`
+
+These are for more advanced routing and matrixing workflows.
+
+### INV POL / INV STR
+
+Post-processing inversion controls.
+Each can be applied to:
+
+- **NONE**
+- **WET**
+- **GLOBAL**
+
+`INV POL` flips polarity.
+`INV STR` swaps the stereo channels.
 
 ### MD (MIDI)
 
-Enables MIDI note control of the FREQUENCY parameter.  
-When active, incoming MIDI note-on messages override the frequency slider with the note's pitch.  
-MIDI velocity controls glide speed (higher velocity = faster transitions).  
-Channel can be configured via right-click on the MIDI channel display (0 = omni, 1–16 = specific).
+Enables MIDI note tracking for `FREQUENCY`.
+When active, note-on pitch becomes the frequency target.
+MIDI velocity influences glide speed, and the channel can be set to omni or a specific input channel via the MIDI channel prompt.
 
 ### CHAOS
 
-Micro-variation engine that adds organic randomness to the effect. Two independent chaos targets:
+Dual-target micro-variation system for movement and instability.
 
-- **CHAOS F (Filter)**: Modulates the HP/LP filter cutoff frequencies when filters are enabled. Creates evolving tonal movement.
-- **CHAOS D (Disperser)**: Modulates the center FREQUENCY parameter. Produces drifting, alive-sounding dispersion.
+- **CHSF**: Modulates the wet filter cutoffs
+- **CHSD**: Modulates the disperser center frequency and a subtle wet gain component
 
-Each chaos target has its own toggle and shares two global controls:
+Each target has its own enable toggle.
+Both use amount and speed controls in their popup editor:
 
-- **AMOUNT (0–100%)**: Modulation depth — how far from the base value the parameter can drift. Default: 50%.
-- **SPEED (0.01–100 Hz)**: Random target rate — how often a new random value is generated. Default: 5 Hz.
+- **AMOUNT (0-100%)**
+- **SPEED (0.01-100 Hz)**
 
-Uses Hermite cubic interpolation (Catmull-Rom) between random targets with a per-channel quadrature drift LFO for organic, stereo-decorrelated movement.
+Internally this uses Hermite-interpolated sample-and-hold motion plus drift, so the modulation stays organic instead of stepping harshly.
 
-### LIM THRESHOLD (−36 to 0 dB)
+### LIM THRESHOLD (-36 to 0 dB)
 
-Peak limiter threshold. Sets the ceiling above which the limiter engages.
-At 0 dB (default) the limiter acts as a transparent safety net. Lower values compress the signal harder.
+Threshold for the transparent peak limiter.
+At `0 dB`, it mainly acts as a safety net.
+Lower values make the limiter work harder.
 
-### LIM MODE
+### LIM MODE (NONE / WET / GLOBAL)
 
 Limiter insertion point:
-- **NONE**: Limiter disabled.
-- **WET**: Limiter applied to the wet signal only (after processing, before dry/wet mix).
-- **GLOBAL**: Limiter applied to the final output (after output gain and dry/wet mix).
 
-The limiter is a dual-stage transparent peak limiter:
-- **Stage 1 (Leveler)**: 2 ms attack, 10 ms release — catches sustained overs.
-- **Stage 2 (Brickwall)**: Instant attack, 100 ms release — catches transient peaks.
+- **NONE**: limiter disabled
+- **WET**: limiter on the wet branch, before final mixing
+- **GLOBAL**: limiter on the final output, after pan
 
-Stereo-linked gain reduction ensures consistent imaging.
+The limiter is a stereo-linked dual-stage design:
+
+- **Stage 1 - leveler**: 2 ms attack, 10 ms release
+- **Stage 2 - brickwall**: instant attack, 100 ms release
+
+## Signal Flow
+
+At a high level, DISP-TR processes signal like this:
+
+1. Input arrives
+2. `MODE IN` matrix is applied to the wet branch
+3. Optional HP/LP filter if `FILTER POS` puts the filter block in `PRE`
+4. Optional tilt EQ if `FILTER POS` puts tilt in `PRE`
+5. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `ALT`, `FEEDBACK`, `STYLE`, MIDI note tracking)
+6. `CHSD` can modulate disperser frequency and subtle wet gain
+7. Optional HP/LP filter if the filter block is in `POST`
+8. Optional tilt EQ if tilt is in `POST`
+9. `MODE OUT` matrix is applied
+10. `LIM MODE = WET` limiter runs if selected
+11. `INV POL` / `INV STR` in `WET` mode run if selected
+12. Dry/wet blend happens (`MIX` or `DRY LEVEL` + `WET LEVEL`)
+13. `PAN` is applied
+14. `LIM MODE = GLOBAL` limiter runs if selected
+15. `INV POL` / `INV STR` in `GLOBAL` mode run if selected
+16. Final safety clip remains at the end
+
+This ordering is important: DISP-TR is not just "all-pass, then mix". The IO section meaningfully changes where filtering, tilt, limiting, routing, and inversion happen.
 
 ## Technical Details
 
 ### DSP Architecture
-- **All-pass filter**: First-order, `y = coeff * (x − z1) + z1` with per-stage state.
-- **Coefficient**: `tan(π * frequency / sampleRate)` mapped through `(1 − c) / (1 + c)`.
-- **Stage distribution**: SHAPE fans stage frequencies around FREQUENCY using a power-curve mapping with low-frequency compensation.
-- **Feedback**: Sign-preserving bipolar smoothstep-mapped output → input loop with per-channel state. Positive and negative feedback produce distinct resonant characters.
-- **Smoothing**: EMA for frequency (80 ms tau), linear SmoothedValue for stages (60 ms), shape (50 ms), and feedback (50 ms).
-- **Fast path**: When all parameters are converged and no crossfade is active, a tight inner loop runs without per-sample smoothing or coefficient checks.
-- **Series crossfade**: 20 ms linear crossfade between old and new series topology on changes.
-- **Chaos**: Hermite cubic interpolation between random targets with per-channel quadrature drift LFO. Per-block coefficient precomputation avoids per-sample `std::exp` calls.
-- **MIDI**: Note-to-frequency via `440 * 2^((note-69)/12)`. Velocity-dependent glide via EMA time constant.
-- **Wet filter**: Biquad HP/LP on the wet signal. Transposed Direct Form II. Coefficients updated once per block (channel 0), shared across channels.
-- **Fast dB→gain**: `std::exp2(x * 0.166)` approximation replacing `std::pow(10, x/20)` for input/output gain conversion.
 
-### State Persistence
-- All parameters saved via JUCE AudioProcessorValueTreeState.
-- UI state (window size, palette, CRT toggle, custom colours, MIDI channel, IO section expanded/collapsed) persisted separately in the processor's state block.
+- **All-pass stage**: first-order topology with per-stage state
+- **Coefficient mapping**: frequency is converted to all-pass coefficient space from the current sample rate
+- **Stage distribution**: `SHAPE` spreads stage frequencies around the center with a non-linear mapping
+- **Feedback**: bipolar and sign-preserving
+- **Series topology**: changing `SERIES` crossfades between old and new chain counts
+- **Fast path**: when smoothed parameters have settled and no series crossfade is active, the processor uses a tighter inner loop
+
+### Smoothing
+
+Current smoothing behavior includes:
+
+- `FREQUENCY`: EMA smoothing, also used for MIDI note glide
+- `STAGES`: smoothed
+- `SHAPE`: smoothed
+- `FEEDBACK`: smoothed
+- `INPUT`, `OUTPUT`, `MIX`: smoothed
+- `DRY LEVEL` / `WET LEVEL` in `SEND`: smoothed
+- `PAN`: smoothed
+- `LIM THRESHOLD`: smoothed before limiter application
+
+This keeps rapid GUI movement and automation from producing unnecessary zippering.
+
+### Filters and Chaos
+
+- Wet HP/LP filters use biquad-based filtering with selectable slopes
+- `CHSF` modulates filter cutoff movement
+- `CHSD` modulates disperser frequency and subtle wet gain
+- Chaos motion uses Hermite interpolation plus drift to stay smooth and less mechanical
+
+### Gain and Safety
+
+- Wet gain conversion uses a fast dB-to-linear approximation
+- The main limiter is dual-stage and stereo-linked
+- A final high-ceiling safety stage remains after the user-facing limiter/invert section
+
+## State Persistence
+
+DISP-TR stores:
+
+- All audio parameters in the main APVTS state
+- UI size
+- palette and CRT/fx-tail settings
+- MIDI channel
+- whether the IO section is expanded
 
 ## Changelog
 
 ### v1.4
-- Feedback is now bipolar (−100% to +100%). Negative feedback inverts the feedback polarity, producing a different resonant character (notch-to-peak inversion). Uses sign-preserving smoothstep mapping.
-- Added CHAOS engine with two independent targets: CHAOS F (filter frequency modulation) and CHAOS D (disperser frequency modulation). Hermite cubic interpolation with quadrature drift LFO.
-- Added HP/LP filter section on the wet signal path with configurable frequency, slope (6/12/24 dB/oct), and per-filter enable/disable.
-- Replaced `std::pow(10, x/20)` with `std::exp2(x * 0.166)` for faster dB-to-gain conversion.
-- Precomputed chaos smooth coefficients in `prepareToPlay`, eliminating 4× `std::exp` calls per audio block.
-- Cached frequency EMA coefficient, eliminating 1× `std::exp` per block in non-MIDI path.
-- Removed duplicate chaos smoothing from outer call sites (already handled inside advance functions).
-- Checkbox rendering aligned with TR-series style (full fill when ticked).
-- All percentage parameters standardized to 1 decimal place across label, slider bar, and numeric entry prompt.
-- Added dual-stage transparent peak limiter with LIM THRESHOLD (−36 to 0 dB) and LIM MODE (NONE/WET/GLOBAL). Stereo-linked gain reduction with 2 ms/10 ms leveler + instant/100 ms brickwall stages.
+
+Current v1.4 state includes:
+
+- bipolar feedback from `-100%` to `+100%`
+- dual-target chaos (`CHSF` and `CHSD`)
+- wet-path HP/LP filters with slope selection
+- IO routing section with `MODE IN`, `MODE OUT`, `SUM BUS`, `MIX MODE`, `FILTER POS`, `INV POL`, and `INV STR`
+- dual-stage transparent peak limiter with `WET` and `GLOBAL` placement options
+- smoothed live control handling for core continuous parameters and utility gains
