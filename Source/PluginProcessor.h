@@ -245,6 +245,18 @@ private:
 	static constexpr double kVariationSmoothingSeconds = 0.05;
 	static constexpr float kVariationFreqDepthOct = 0.25f;
 	static constexpr float kVariationShapeDepth = 0.04f;
+	static constexpr float kVariationFastMinHz = 2.0f;
+	static constexpr float kVariationFastMaxHz = 20.0f;
+	static constexpr float kVariationFastBlendMax = 0.65f;
+	static constexpr float kVariationExtremeMinHz = 28.0f;
+	static constexpr float kVariationExtremeMaxHz = 55.0f;
+	static constexpr float kVariationExtremeBlendMax = 0.18f;
+	static constexpr float kVariationExtremeStart = 0.70f;
+	static constexpr float kVariationUltraMinHz = 70.0f;
+	static constexpr float kVariationUltraMaxHz = 120.0f;
+	static constexpr float kVariationUltraBlendMax = 0.06f;
+	static constexpr float kVariationUltraStart = 0.90f;
+	static constexpr float kVariationCombinedLimit = 1.25f;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
 	int activeStages = 0;
@@ -489,8 +501,48 @@ private:
 		}
 	};
 
+	struct VariationSmoothSH
+	{
+		float curr = 0.0f;
+		float next = 0.0f;
+		float phase = 0.0f;
+		juce::Random rng;
+
+		void reset (juce::int64 seed) noexcept
+		{
+			rng.setSeed (seed);
+			curr = 0.0f;
+			next = rng.nextFloat() * 2.0f - 1.0f;
+			phase = 0.0f;
+		}
+
+		float advance (float rateHz, float sampleRate) noexcept
+		{
+			const float sr = juce::jmax (1.0f, sampleRate);
+			phase += juce::jmax (0.01f, rateHz) / sr;
+			if (phase >= 1.0f)
+			{
+				phase -= std::floor (phase);
+				curr = next;
+				next = rng.nextFloat() * 2.0f - 1.0f;
+			}
+
+			const float t = juce::jlimit (0.0f, 1.0f, phase);
+			const float t2 = t * t;
+			const float t3 = t2 * t;
+			const float u = t3 * (t * (t * 6.0f - 15.0f) + 10.0f);
+			return curr + (next - curr) * u;
+		}
+	};
+
 	VariationDrift variationFreqDrift_;
 	VariationDrift variationShapeDrift_;
+	VariationSmoothSH variationFreqFast_;
+	VariationSmoothSH variationShapeFast_;
+	VariationSmoothSH variationFreqExtreme_;
+	VariationSmoothSH variationShapeExtreme_;
+	VariationSmoothSH variationFreqUltra_;
+	VariationSmoothSH variationShapeUltra_;
 
 	inline void advanceVariation (float amount, float& freqOctOffset, float& shapeOffset) noexcept
 	{
@@ -504,8 +556,32 @@ private:
 
 		const float sr = (float) currentSampleRate;
 		const float baseRate = 0.03f + amt * 0.12f;
-		freqOctOffset = variationFreqDrift_.advance (baseRate, sr) * amt * kVariationFreqDepthOct;
-		shapeOffset = variationShapeDrift_.advance (baseRate * 1.37f, sr) * amt * kVariationShapeDepth;
+		const float fastMix = amt * amt;
+		const float fastRate = kVariationFastMinHz + (kVariationFastMaxHz - kVariationFastMinHz) * fastMix;
+		const float fastWeight = fastMix * kVariationFastBlendMax;
+		const float extremeNorm = juce::jlimit (0.0f, 1.0f, (amt - kVariationExtremeStart) / (1.0f - kVariationExtremeStart));
+		const float extremeSmooth = extremeNorm * extremeNorm * (3.0f - 2.0f * extremeNorm);
+		const float extremeMix = extremeSmooth * extremeSmooth;
+		const float extremeRate = kVariationExtremeMinHz + (kVariationExtremeMaxHz - kVariationExtremeMinHz) * extremeMix;
+		const float extremeWeight = extremeMix * kVariationExtremeBlendMax;
+		const float ultraNorm = juce::jlimit (0.0f, 1.0f, (amt - kVariationUltraStart) / (1.0f - kVariationUltraStart));
+		const float ultraMix = ultraNorm * ultraNorm * ultraNorm * ultraNorm;
+		const float ultraRate = kVariationUltraMinHz + (kVariationUltraMaxHz - kVariationUltraMinHz) * ultraMix;
+		const float ultraWeight = ultraMix * kVariationUltraBlendMax;
+
+		const float freqCombined = juce::jlimit (-kVariationCombinedLimit, kVariationCombinedLimit,
+			variationFreqDrift_.advance (baseRate, sr)
+				+ variationFreqFast_.advance (fastRate, sr) * fastWeight
+				+ variationFreqExtreme_.advance (extremeRate, sr) * extremeWeight
+				+ variationFreqUltra_.advance (ultraRate, sr) * ultraWeight);
+		const float shapeCombined = juce::jlimit (-kVariationCombinedLimit, kVariationCombinedLimit,
+			variationShapeDrift_.advance (baseRate * 1.37f, sr)
+				+ variationShapeFast_.advance (fastRate * 0.73f, sr) * fastWeight
+				+ variationShapeExtreme_.advance (extremeRate * 0.61f, sr) * extremeWeight
+				+ variationShapeUltra_.advance (ultraRate * 0.67f, sr) * ultraWeight);
+
+		freqOctOffset = freqCombined * amt * kVariationFreqDepthOct;
+		shapeOffset = shapeCombined * amt * kVariationShapeDepth;
 	}
 
 	// Generic smooth S&H + Drift chaos engine (per-sample advance)

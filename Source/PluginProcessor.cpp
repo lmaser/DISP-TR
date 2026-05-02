@@ -280,6 +280,12 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCoeffStages = -1;
 	variationFreqDrift_.reset();
 	variationShapeDrift_.reset();
+	variationFreqFast_.reset (0x44565031);
+	variationShapeFast_.reset (0x44565053);
+	variationFreqExtreme_.reset (0x44565831);
+	variationShapeExtreme_.reset (0x44565853);
+	variationFreqUltra_.reset (0x44565531);
+	variationShapeUltra_.reset (0x44565553);
 
 	// Reset MIDI note tracking
 	lastMidiNote.store (-1, std::memory_order_relaxed);
