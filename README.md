@@ -92,12 +92,13 @@ Stereo processing mode for the wet disperser path.
 Alternates the sign of every other stage coefficient.
 This changes the internal phase pattern of the network and gives a different transient and resonance feel without changing the basic control set.
 
-### INPUT (-100 to 0 dB)
+### INPUT (-INF to +24 dB)
 
 Wet-path input gain into the disperser.
 This affects the processed signal only, not the dry branch.
+The fader floor is -144 dB, displayed as -INF; 0 dB is centered on the control.
 
-### OUTPUT (-100 to +24 dB)
+### OUTPUT (-INF to +24 dB)
 
 Wet-path output gain after the disperser.
 This affects the processed signal only.
@@ -207,7 +208,7 @@ Lower values make the limiter work harder.
 Limiter insertion point:
 
 - **NONE**: limiter disabled
-- **WET**: limiter on the wet branch, before final mixing
+- **WET**: limiter on the wet branch after wet input/output gain, before final mixing
 - **GLOBAL**: limiter on the final output, after pan
 
 The limiter is a stereo-linked dual-stage design:
@@ -228,13 +229,14 @@ At a high level, DISP-TR processes signal like this:
 7. Optional HP/LP filter if the filter block is in `POST`
 8. Optional tilt EQ if tilt is in `POST`
 9. `MODE OUT` matrix is applied
-10. `LIM MODE = WET` limiter runs if selected
-11. `INV POL` / `INV STR` in `WET` mode run if selected
-12. Dry/wet blend happens (`MIX` or `DRY LEVEL` + `WET LEVEL`)
-13. `PAN` is applied
-14. `LIM MODE = GLOBAL` limiter runs if selected
-15. `INV POL` / `INV STR` in `GLOBAL` mode run if selected
-16. Final safety clip remains at the end
+10. `INV POL` / `INV STR` in `WET` mode run if selected
+11. Wet `INPUT` / `OUTPUT` gain is applied
+12. `LIM MODE = WET` limiter runs if selected
+13. Dry/wet blend happens (`MIX` or `DRY LEVEL` + `WET LEVEL`)
+14. `PAN` is applied
+15. `LIM MODE = GLOBAL` limiter runs if selected
+16. `INV POL` / `INV STR` in `GLOBAL` mode run if selected
+17. Final safety clip remains at the end
 
 This ordering is important: DISP-TR is not just "all-pass, then mix". The IO section meaningfully changes where filtering, tilt, limiting, routing, and inversion happen.
 
@@ -273,6 +275,7 @@ This keeps rapid GUI movement and automation from producing unnecessary zipperin
 
 ### Gain and Safety
 
+- Input/output wet gain faders use the common -144 dB (-INF) to +24 dB curve with 0 dB centered
 - Wet gain conversion uses a fast dB-to-linear approximation
 - The main limiter is dual-stage and stereo-linked
 - A final high-ceiling safety stage remains after the user-facing limiter/invert section

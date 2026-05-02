@@ -39,7 +39,19 @@ static juce::String formatBarFrequencyHzText (double hz)
     return juce::String (safeHz, 3) + " Hz";
 }
 
-static constexpr float kSilenceDb    = -80.0f;
+static bool isGainFaderFloor (float dB) noexcept
+{
+    return dB <= DisperserAudioProcessor::kGainFloorDb + 0.001f;
+}
+
+static juce::String formatGainFaderDb (float dB)
+{
+    if (isGainFaderFloor (dB))
+        return "-INF dB";
+    if (std::abs (dB) < 0.05f)
+        return "0 dB";
+    return juce::String (dB, 1) + " dB";
+}
 
 static constexpr double kModCenter  = 0.5;
 static constexpr double kModScale   = 3.0;
@@ -64,6 +76,9 @@ static double multiplierToModSlider (double mult)
 
 static juce::String formatMidiChannelTooltip (int ch)
 {
+    if (ch <= 0)
+        return "OMNI";
+
     return "CHANNEL " + juce::String (ch);
 }
 
@@ -380,6 +395,20 @@ void DisperserAudioProcessorEditor::DualMixBarComponent::setLevelFromMouseX (flo
         param->setValueNotifyingHost (level);
 }
 
+void DisperserAudioProcessorEditor::DualMixBarComponent::updateTooltipForTarget (DragTarget target)
+{
+    if (target == None)
+    {
+        setTooltip ({});
+        return;
+    }
+
+    const float level = (target == DRY) ? dryLevel_ : wetLevel_;
+    const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
+    const juce::String label = (target == DRY) ? "DRY" : "WET";
+    setTooltip (dB <= -100.0f ? (label + ": -INF dB") : (label + ": " + juce::String (dB, 1) + " dB"));
+}
+
 void DisperserAudioProcessorEditor::DualMixBarComponent::updateFromProcessor()
 {
     if (owner == nullptr) return;
@@ -443,6 +472,7 @@ void DisperserAudioProcessorEditor::DualMixBarComponent::mouseDown (const juce::
         lastTouched_ = currentDrag_;
         setLevelFromMouseX (e.position.x, currentDrag_);
         updateFromProcessor();
+        updateTooltipForTarget (currentDrag_);
         if (owner) { if (owner->refreshLegendTextCache()) owner->updateCachedLayout(); owner->repaint(); }
     }
 }
@@ -453,6 +483,7 @@ void DisperserAudioProcessorEditor::DualMixBarComponent::mouseDrag (const juce::
     {
         setLevelFromMouseX (e.position.x, currentDrag_);
         updateFromProcessor();
+        updateTooltipForTarget (currentDrag_);
         if (owner) { if (owner->refreshLegendTextCache()) owner->updateCachedLayout(); owner->repaint(); }
     }
 }
@@ -464,11 +495,7 @@ void DisperserAudioProcessorEditor::DualMixBarComponent::mouseUp (const juce::Mo
 
 void DisperserAudioProcessorEditor::DualMixBarComponent::mouseMove (const juce::MouseEvent& e)
 {
-    const auto target = hitTestMarker (e.position);
-    const float level = (target == DRY) ? dryLevel_ : wetLevel_;
-    const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
-    const juce::String label = (target == DRY) ? "DRY" : "WET";
-    setTooltip (dB <= -100.0f ? (label + ": -INF dB") : (label + ": " + juce::String (dB, 1) + " dB"));
+    updateTooltipForTarget (hitTestMarker (e.position));
 }
 
 //========================== FilterBarComponent ==========================
@@ -540,6 +567,24 @@ void DisperserAudioProcessorEditor::FilterBarComponent::setFreqFromMouseX (float
                                          : DisperserAudioProcessor::kParamFilterLpFreq;
     if (auto* param = proc.apvts.getParameter (paramId))
         param->setValueNotifyingHost (param->convertTo0to1 (freq));
+}
+
+void DisperserAudioProcessorEditor::FilterBarComponent::updateTooltipForTarget (DragTarget target)
+{
+    if (target == HP)
+    {
+        const int hz = juce::roundToInt (hpFreq_);
+        setTooltip ("HP: " + juce::String (hz) + " Hz");
+    }
+    else if (target == LP)
+    {
+        const int hz = juce::roundToInt (lpFreq_);
+        setTooltip ("LP: " + juce::String (hz) + " Hz");
+    }
+    else
+    {
+        setTooltip ({});
+    }
 }
 
 void DisperserAudioProcessorEditor::FilterBarComponent::updateFromProcessor()
@@ -631,6 +676,7 @@ void DisperserAudioProcessorEditor::FilterBarComponent::mouseDown (const juce::M
     {
         setFreqFromMouseX (e.position.x, currentDrag_);
         updateFromProcessor();
+        updateTooltipForTarget (currentDrag_);
     }
 }
 
@@ -641,6 +687,7 @@ void DisperserAudioProcessorEditor::FilterBarComponent::mouseDrag (const juce::M
         setFreqFromMouseX (e.position.x, currentDrag_);
         // Update local state immediately so paint reflects the new position without waiting for timer
         updateFromProcessor();
+        updateTooltipForTarget (currentDrag_);
     }
 }
 
@@ -651,21 +698,7 @@ void DisperserAudioProcessorEditor::FilterBarComponent::mouseUp (const juce::Mou
 
 void DisperserAudioProcessorEditor::FilterBarComponent::mouseMove (const juce::MouseEvent& e)
 {
-    const auto target = hitTestMarker (e.position);
-    if (target == HP)
-    {
-        const int hz = juce::roundToInt (hpFreq_);
-        setTooltip ("HP: " + juce::String (hz) + " Hz");
-    }
-    else if (target == LP)
-    {
-        const int hz = juce::roundToInt (lpFreq_);
-        setTooltip ("LP: " + juce::String (hz) + " Hz");
-    }
-    else
-    {
-        setTooltip ({});
-    }
+    updateTooltipForTarget (hitTestMarker (e.position));
 }
 
 void DisperserAudioProcessorEditor::FilterBarComponent::mouseDoubleClick (const juce::MouseEvent& e)
@@ -761,6 +794,8 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     styleSlider.setNumDecimalPlacesToDisplay (0);
     inputSlider.setNumDecimalPlacesToDisplay (1);
     outputSlider.setNumDecimalPlacesToDisplay (1);
+    inputSlider.setSkewFactor (DisperserAudioProcessor::kGainSkew);
+    outputSlider.setSkewFactor (DisperserAudioProcessor::kGainSkew);
     tiltSlider.setNumDecimalPlacesToDisplay (1);
     panSlider.setNumDecimalPlacesToDisplay (1);
     mixSlider.setNumDecimalPlacesToDisplay (1);
@@ -1438,7 +1473,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedInputTextShort = getInputTextShort();
     {
         const float inDb = (float) inputSlider.getValue();
-        if (inDb <= kSilenceDb)
+        if (isGainFaderFloor (inDb))
             cachedInputIntOnly = "-INF";
         else
             cachedInputIntOnly = juce::String ((int) inputSlider.getValue()) + "dB";
@@ -1448,7 +1483,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedOutputTextShort = getOutputTextShort();
     {
         const float outDb = (float) outputSlider.getValue();
-        if (outDb <= kSilenceDb)
+        if (isGainFaderFloor (outDb))
             cachedOutputIntOnly = "-INF";
         else
             cachedOutputIntOnly = juce::String ((int) outputSlider.getValue()) + "dB";
@@ -2011,8 +2046,8 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         else if (&s == &mixSlider)     worstCaseText = "100.0000";
         else if (&s == &modSlider)     worstCaseText = "4.00";
         else if (&s == &panSlider)     worstCaseText = "100";
-        else if (&s == &inputSlider)   worstCaseText = "-100.0";
-        else if (&s == &outputSlider)  worstCaseText = "-100.0";
+        else if (&s == &inputSlider)   worstCaseText = "-144.0";
+        else if (&s == &outputSlider)  worstCaseText = "-144.0";
         else                           worstCaseText = "999.99";
 
         const int maxInputTextW = juce::jmax (1, stringWidth (f, worstCaseText));
@@ -2134,15 +2169,15 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         }
         else if (&s == &inputSlider)
         {
-            minVal = -100.0;
-            maxVal = 0.0;
+            minVal = DisperserAudioProcessor::kGainFloorDb;
+            maxVal = DisperserAudioProcessor::kGainMaxDb;
             maxDecs = 1;
             maxLen = 6;
         }
         else if (&s == &outputSlider)
         {
-            minVal = -100.0;
-            maxVal = 24.0;
+            minVal = DisperserAudioProcessor::kGainFloorDb;
+            maxVal = DisperserAudioProcessor::kGainMaxDb;
             maxDecs = 1;
             maxLen = 6;
         }
@@ -3187,7 +3222,10 @@ void DisperserAudioProcessorEditor::openChaosConfigPrompt (const char* amtParamI
 
             constexpr int kEditorTextPadPx = 12;
             constexpr int kMinEditorWidthPx = 24;
-            const int editorW = juce::jlimit (kMinEditorWidthPx, 80,
+            const int maxEditorWidthPx = (unitLabel != nullptr && unitLabel->getText() == "Hz")
+                                        ? juce::jmax (80, stringWidth (font, "100.00") + kEditorTextPadPx * 2)
+                                        : 80;
+            const int editorW = juce::jlimit (kMinEditorWidthPx, maxEditorWidthPx,
                                               textW + kEditorTextPadPx * 2);
 
             const int visualW = labelW + spaceW + textW + unitW;
@@ -4279,41 +4317,25 @@ juce::String DisperserAudioProcessorEditor::getMixTextShort() const
 juce::String DisperserAudioProcessorEditor::getInputText() const
 {
     const float db = (float) inputSlider.getValue();
-    if (db <= kSilenceDb)
-        return "-INF dB INPUT";
-    if (std::abs (db) < 0.05f)
-        return "0 dB INPUT";
-    return juce::String (db, 1) + " dB INPUT";
+    return formatGainFaderDb (db) + " INPUT";
 }
 
 juce::String DisperserAudioProcessorEditor::getInputTextShort() const
 {
     const float db = (float) inputSlider.getValue();
-    if (db <= kSilenceDb)
-        return "-INF dB IN";
-    if (std::abs (db) < 0.05f)
-        return "0 dB IN";
-    return juce::String (db, 1) + " dB IN";
+    return formatGainFaderDb (db) + " IN";
 }
 
 juce::String DisperserAudioProcessorEditor::getOutputText() const
 {
     const float db = (float) outputSlider.getValue();
-    if (db <= kSilenceDb)
-        return "-INF dB OUTPUT";
-    if (std::abs (db) < 0.05f)
-        return "0 dB OUTPUT";
-    return juce::String (db, 1) + " dB OUTPUT";
+    return formatGainFaderDb (db) + " OUTPUT";
 }
 
 juce::String DisperserAudioProcessorEditor::getOutputTextShort() const
 {
     const float db = (float) outputSlider.getValue();
-    if (db <= kSilenceDb)
-        return "-INF dB OUT";
-    if (std::abs (db) < 0.05f)
-        return "0 dB OUT";
-    return juce::String (db, 1) + " dB OUT";
+    return formatGainFaderDb (db) + " OUT";
 }
 
 juce::String DisperserAudioProcessorEditor::getTiltText() const
