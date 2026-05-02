@@ -16,6 +16,7 @@ public:
 	static constexpr const char* kParamSeries    = "series";
 	static constexpr const char* kParamFreq      = "freq";
 	static constexpr const char* kParamShape     = "shape";
+	static constexpr const char* kParamVariation = "variation";
 	static constexpr const char* kParamAlt       = "alt";
 	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamMod       = "mod";
@@ -83,6 +84,9 @@ public:
 
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
+	static constexpr float kVariationMin = 0.0f;
+	static constexpr float kVariationMax = 1.0f;
+	static constexpr float kVariationDefault = 0.0f;
 	static constexpr float kFeedbackMin     = -1.0f;
 	static constexpr float kFeedbackMax     = 1.0f;
 	static constexpr float kFeedbackDefault = 0.0f;
@@ -232,11 +236,15 @@ private:
 	float freqEmaCoeff = 0.0f;
 	float freqEmaCoeffDefault_ = 0.0f;
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> shapeSmoothed;
+	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> variationSmoothed;
 	static constexpr double kStageSmoothingSeconds = 0.06;
 	static constexpr float kFreqTauDefault   = 0.08f;
 	static constexpr float kMidiGlideTauMax  = 0.200f;
 	static constexpr float kMidiGlideTauMin  = 0.0002f;
 	static constexpr double kShapeSmoothingSeconds = 0.05;
+	static constexpr double kVariationSmoothingSeconds = 0.05;
+	static constexpr float kVariationFreqDepthOct = 0.25f;
+	static constexpr float kVariationShapeDepth = 0.04f;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
 	int activeStages = 0;
@@ -322,6 +330,7 @@ private:
 	std::atomic<float>* seriesParam = nullptr;
 	std::atomic<float>* freqParam = nullptr;
 	std::atomic<float>* shapeParam = nullptr;
+	std::atomic<float>* variationParam = nullptr;
 	std::atomic<float>* altParam = nullptr;
 	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* modParam = nullptr;
@@ -383,20 +392,22 @@ private:
 	bool  chaosDelayEnabled_  = false;
 	bool  chaosStereo_        = false;   // true when style >= 1 (per-channel G, quadrature F)
 
-	// CHS D parameters (disperser frequency modulation + gain)
+	// CHS D parameters (common micro-delay/gain)
 	float chaosAmtD_                    = 0.0f;
 	float chaosAmtNormD_                = 0.0f;   // cached amtD * 0.01
 	float chaosShPeriodD_               = 8820.0f;
 	float smoothedChaosShPeriodD_       = 8820.0f;
-	float chaosFreqMaxOct_              = 0.0f;
-	float smoothedChaosFreqMaxOct_      = 0.0f;
+	float chaosDelayMaxSamples_         = 0.0f;
+	float smoothedChaosDelayMaxSamples_ = 0.0f;
 	float chaosGainMaxDb_               = 0.0f;
 	float smoothedChaosGainMaxDb_       = 0.0f;
+	float chaosDelaySmoothedSamples_[2] = {};
+	bool  chaosDelaySmoothReady_[2]     = {};
 	float chaosDriveAmtSmoothed_        = 0.0f;
 	float chaosDriveSpdSmoothed_        = 0.0f;
 	bool  chaosDriveParamSmoothReady_   = false;
 
-	// CHS D smooth S&H + Drift: freq (per-channel; ch0 used for allpass freq mod)
+	// CHS D smooth S&H + Drift: micro-delay offset
 	float chaosDPrev_[2]         = {};
 	float chaosDCurr_[2]         = {};
 	float chaosDNext_[2]         = {};
@@ -439,9 +450,63 @@ private:
 	// Chaos per-sample param smoothing (precomputed in prepareToPlay)
 	float chaosParamSmoothCoeff_ = 0.999f;
 	float cachedChaosParamSmoothCoeff_ = 0.999f;
+	float chaosDelaySmoothStep_ = 0.001f;
+
+	static constexpr int kChaosDelayBufLen = 1024;
+	float chaosDelayBuf_[2][kChaosDelayBufLen] = {};
+	int   chaosDelayWritePos_ = 0;
 
 	static constexpr float kChaosDriftAmp = 0.3f;
 	static constexpr float kTwoPi = 6.283185307f;
+
+	struct VariationDrift
+	{
+		float phase1 = 0.0f;
+		float phase2 = 0.0f;
+		float phase3 = 0.0f;
+
+		void reset() noexcept
+		{
+			phase1 = 0.0f;
+			phase2 = 0.0f;
+			phase3 = 0.0f;
+		}
+
+		float advance (float rateHz, float sampleRate) noexcept
+		{
+			const float invSr = 1.0f / juce::jmax (1.0f, sampleRate);
+			phase1 += rateHz * invSr;
+			phase2 += rateHz * 0.7937005f * invSr;
+			phase3 += rateHz * 0.6180340f * invSr;
+
+			if (phase1 >= 1.0f) phase1 -= std::floor (phase1);
+			if (phase2 >= 1.0f) phase2 -= std::floor (phase2);
+			if (phase3 >= 1.0f) phase3 -= std::floor (phase3);
+
+			return std::sin (phase1 * kTwoPi) * 0.5f
+			     + std::sin (phase2 * kTwoPi) * 0.3f
+			     + std::sin (phase3 * kTwoPi) * 0.2f;
+		}
+	};
+
+	VariationDrift variationFreqDrift_;
+	VariationDrift variationShapeDrift_;
+
+	inline void advanceVariation (float amount, float& freqOctOffset, float& shapeOffset) noexcept
+	{
+		const float amt = juce::jlimit (0.0f, 1.0f, amount);
+		if (amt <= 0.000001f)
+		{
+			freqOctOffset = 0.0f;
+			shapeOffset = 0.0f;
+			return;
+		}
+
+		const float sr = (float) currentSampleRate;
+		const float baseRate = 0.03f + amt * 0.12f;
+		freqOctOffset = variationFreqDrift_.advance (baseRate, sr) * amt * kVariationFreqDepthOct;
+		shapeOffset = variationShapeDrift_.advance (baseRate * 1.37f, sr) * amt * kVariationShapeDepth;
+	}
 
 	// Generic smooth S&H + Drift chaos engine (per-sample advance)
 	inline void advanceChaosEngine (
@@ -494,7 +559,7 @@ private:
 		chaosDriveSpdSmoothed_ = std::exp (spdLog + (targetSpdLog - spdLog) * smoothStep);
 
 		chaosAmtNormD_ = chaosDriveAmtSmoothed_ * 0.01f;
-		smoothedChaosFreqMaxOct_ = chaosAmtNormD_ * 2.0f;
+		smoothedChaosDelayMaxSamples_ = chaosAmtNormD_ * 0.005f * sr;
 		smoothedChaosGainMaxDb_ = chaosAmtNormD_ * 1.0f;
 		smoothedChaosShPeriodD_ = sr / juce::jmax (kChaosSpdMin, chaosDriveSpdSmoothed_);
 
@@ -517,6 +582,59 @@ private:
 		{
 			chaosDOut_[1] = chaosDOut_[0];
 			chaosGOut_[1] = chaosGOut_[0];
+		}
+	}
+
+	inline void applyChaosDelay (float& wetL, float& wetR) noexcept
+	{
+		const int wp = chaosDelayWritePos_;
+		chaosDelayBuf_[0][wp] = wetL;
+		chaosDelayBuf_[1][wp] = wetR;
+
+		const float centerDelay = smoothedChaosDelayMaxSamples_;
+		const int mask = kChaosDelayBufLen - 1;
+
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float targetDelaySamp = juce::jlimit (0.0f, (float) (kChaosDelayBufLen - 2),
+				centerDelay + chaosDOut_[ch] * smoothedChaosDelayMaxSamples_);
+			float& delaySamp = chaosDelaySmoothedSamples_[ch];
+			if (! chaosDelaySmoothReady_[ch])
+			{
+				delaySamp = targetDelaySamp;
+				chaosDelaySmoothReady_[ch] = true;
+			}
+			else
+			{
+				delaySamp += (targetDelaySamp - delaySamp) * chaosDelaySmoothStep_;
+			}
+
+			const float readPos = (float) wp - delaySamp;
+			const int iPos = (int) std::floor (readPos);
+			const float frac = readPos - (float) iPos;
+
+			const float p0 = chaosDelayBuf_[ch][(iPos - 1) & mask];
+			const float p1 = chaosDelayBuf_[ch][ iPos      & mask];
+			const float p2 = chaosDelayBuf_[ch][(iPos + 1) & mask];
+			const float p3 = chaosDelayBuf_[ch][(iPos + 2) & mask];
+			const float c0 = p1;
+			const float c1 = p2 - (1.0f / 3.0f) * p0 - 0.5f * p1 - (1.0f / 6.0f) * p3;
+			const float c2 = 0.5f * (p0 + p2) - p1;
+			const float c3 = (1.0f / 6.0f) * (p3 - p0) + 0.5f * (p1 - p2);
+			float& wet = (ch == 0) ? wetL : wetR;
+			wet = ((c3 * frac + c2) * frac + c1) * frac + c0;
+		}
+
+		chaosDelayWritePos_ = (wp + 1) & mask;
+
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float gainDb = chaosGOut_[ch] * smoothedChaosGainMaxDb_;
+			const float ex = gainDb * 0.16609640474f;
+			const float exln2 = ex * 0.6931472f;
+			const float gainLin = 1.0f + exln2 * (1.0f + exln2 * 0.5f);
+			float& wet = (ch == 0) ? wetL : wetR;
+			wet *= gainLin;
 		}
 	}
 
