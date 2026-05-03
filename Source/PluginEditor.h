@@ -61,7 +61,7 @@ private:
 
         juce::String getTextFromValue (double v) override
         {
-            if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->variationSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
+                if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->jitterSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
             {
                 double percent = v * 100.0;
                 return juce::String (percent, 1);
@@ -117,7 +117,7 @@ private:
     BarSlider seriesSlider;
     BarSlider freqSlider;
     BarSlider shapeSlider;
-    BarSlider variationSlider;
+    BarSlider jitterSlider;
     BarSlider styleSlider;
     BarSlider feedbackSlider;
     BarSlider modSlider;
@@ -252,7 +252,7 @@ private:
     std::unique_ptr<SliderAttachment> seriesAttachment;
     std::unique_ptr<SliderAttachment> freqAttachment;
     std::unique_ptr<SliderAttachment> shapeAttachment;
-    std::unique_ptr<SliderAttachment> variationAttachment;
+    std::unique_ptr<SliderAttachment> jitterAttachment;
     std::unique_ptr<SliderAttachment> styleAttachment;
     std::unique_ptr<SliderAttachment> feedbackAttachment;
     std::unique_ptr<SliderAttachment> modAttachment;
@@ -412,8 +412,8 @@ private:
     juce::String getShapeText() const;
     juce::String getShapeTextShort() const;
 
-    juce::String getVariationText() const;
-    juce::String getVariationTextShort() const;
+    juce::String getJitterText() const;
+    juce::String getJitterTextShort() const;
 
     juce::String getStyleText() const;
     juce::String getStyleTextShort() const;
@@ -482,9 +482,9 @@ private:
     juce::String cachedShapeTextFull;
     juce::String cachedShapeTextShort;
     juce::String cachedShapeIntOnly;
-    juce::String cachedVariationTextFull;
-    juce::String cachedVariationTextShort;
-    juce::String cachedVariationIntOnly;
+    juce::String cachedJitterTextFull;
+    juce::String cachedJitterTextShort;
+    juce::String cachedJitterIntOnly;
     juce::String cachedStyleTextFull;
     juce::String cachedStyleTextShort;
     juce::String cachedFeedbackTextFull;
@@ -527,7 +527,7 @@ private:
     static constexpr double kDefaultSeries = (double) DisperserAudioProcessor::kSeriesDefault;
     static constexpr double kDefaultFreq   = (double) DisperserAudioProcessor::kFreqDefault;
     static constexpr double kDefaultShape    = (double) DisperserAudioProcessor::kShapeDefault;
-    static constexpr double kDefaultVariation = (double) DisperserAudioProcessor::kVariationDefault;
+    static constexpr double kDefaultJitter = (double) DisperserAudioProcessor::kJitterDefault;
     static constexpr double kDefaultFeedback = (double) DisperserAudioProcessor::kFeedbackDefault;
     static constexpr double kDefaultMod      = (double) DisperserAudioProcessor::kModDefault;
     static constexpr double kDefaultMix      = (double) DisperserAudioProcessor::kMixDefault;

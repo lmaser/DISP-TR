@@ -19,7 +19,7 @@ The core idea is:
 - `MOD` scales that center frequency
 - `STAGES` and `SERIES` increase complexity and depth
 - `SHAPE` spreads the stage distribution around the center
-- `VAR` adds controlled internal movement to frequency and shape behavior
+- `JIT` adds controlled jitter movement to frequency, shape, and subtle feedback behavior
 - `FEEDBACK` adds resonance and character
 
 ## Interface
@@ -27,7 +27,7 @@ The core idea is:
 DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, and numeric popup entry.
 
 - **Bar sliders**: Click and drag horizontally. Right-click the value area for numeric entry when available.
-- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FEEDBACK`, `STAGES`, `SERIES`, `SHAPE`, `VAR`, `STYLE`, plus the `ALT` and `MD` toggles.
+- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FEEDBACK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MD` toggles.
 - **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM THRESHOLD`, filter controls, routing/mode combos, invert options, and chaos toggles.
 - **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
 - **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
@@ -70,16 +70,16 @@ Controls how far the per-stage frequencies spread around the center frequency.
 - `0%`: stages cluster tightly around the center
 - Higher values: stages fan outward for a broader, more complex phase pattern
 
-### VAR (0-100%)
+### JIT (0-100%)
 
-Adds deterministic internal movement to the disperser by modulating the effective `FREQUENCY` and `SHAPE` targets.
+Adds deterministic internal jitter to the disperser by modulating the effective `FREQUENCY` and `SHAPE` targets, with a very small bounded feedback offset.
 
 - Low values: slow, organic drift
 - Mid values: added smooth sample-and-hold movement
 - High values: faster extreme layers for more animated instability
 - Near `100%`: a very small harmonic/ring-like layer adds extra crunch without directly distorting the audio
 
-The modulation is smoothed, bounded, and seeded deterministically so repeated sessions keep a stable character.
+The frequency and shape movement uses independent deterministic lanes per active `SERIES`, while feedback jitter stays global because feedback is injected before the full all-pass chain. The modulation is smoothed, bounded, and seeded deterministically so repeated sessions keep a stable character.
 
 ### FEEDBACK (-100 to +100%)
 
@@ -196,7 +196,7 @@ MIDI velocity influences glide speed, and the channel can be set to omni or a sp
 
 ### CHAOS
 
-Dual-target micro-variation system for movement and instability.
+Dual-target chaos system for movement and instability.
 
 - **CHSF**: Modulates the wet filter cutoffs
 - **CHSD**: Adds pre-core micro-delay decorrelation and a subtle wet gain movement
@@ -237,7 +237,7 @@ At a high level, DISP-TR processes signal like this:
 3. Optional HP/LP filter if `FILTER POS` puts the filter block in `PRE`
 4. Optional tilt EQ if `FILTER POS` puts tilt in `PRE`
 5. Optional `CHSD` pre-core micro-delay decorrelation and subtle gain movement
-6. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `VAR`, `ALT`, `FEEDBACK`, `STYLE`, MIDI note tracking)
+6. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `ALT`, `FEEDBACK`, `STYLE`, MIDI note tracking)
 7. Optional HP/LP filter if the filter block is in `POST`
 8. Optional tilt EQ if tilt is in `POST`
 9. `MODE OUT` matrix is applied
@@ -259,7 +259,7 @@ This ordering is important: DISP-TR is not just "all-pass, then mix". The IO sec
 - **All-pass stage**: first-order topology with per-stage state
 - **Coefficient mapping**: frequency is converted to all-pass coefficient space from the current sample rate
 - **Stage distribution**: `SHAPE` spreads stage frequencies around the center with a non-linear mapping
-- **Variation**: `VAR` layers deterministic drift, smooth sample-and-hold movement, and an extreme harmonic micro-layer over the effective frequency/shape targets
+- **Jitter**: `JIT` layers deterministic drift, smooth sample-and-hold movement, and an extreme harmonic micro-layer over per-series frequency/shape targets, plus a small bounded feedback offset
 - **Feedback**: bipolar and sign-preserving
 - **Series topology**: changing `SERIES` crossfades between old and new chain counts
 - **Fast path**: when smoothed parameters have settled and no series crossfade is active, the processor uses a tighter inner loop
@@ -271,7 +271,7 @@ Current smoothing behavior includes:
 - `FREQUENCY`: EMA smoothing, also used for MIDI note glide
 - `STAGES`: smoothed
 - `SHAPE`: smoothed
-- `VAR`: smoothed before its internal movement layers
+- `JIT`: smoothed before its internal movement layers
 - `FEEDBACK`: smoothed
 - `INPUT`, `OUTPUT`, `MIX`: smoothed
 - `DRY LEVEL` / `WET LEVEL` in `SEND`: smoothed
@@ -311,7 +311,7 @@ DISP-TR stores:
 Current v1.4 state includes:
 
 - bipolar feedback from `-100%` to `+100%`
-- `VAR` movement for deterministic frequency/shape instability and high-range harmonic crunch
+- `JIT` movement for deterministic per-series frequency/shape jitter, subtle feedback motion, and high-range harmonic crunch
 - dual-target chaos (`CHSF` and `CHSD`)
 - wet-path HP/LP filters with slope selection
 - IO routing section with `MODE IN`, `MODE OUT`, `SUM BUS`, `MIX MODE`, `FILTER POS`, `INV POL`, and `INV STR`

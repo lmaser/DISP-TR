@@ -129,7 +129,7 @@ DisperserAudioProcessor::DisperserAudioProcessor()
 	seriesParam = apvts.getRawParameterValue (kParamSeries);
 	freqParam = apvts.getRawParameterValue (kParamFreq);
 	shapeParam = apvts.getRawParameterValue (kParamShape);
-	variationParam = apvts.getRawParameterValue (kParamVariation);
+	jitterParam = apvts.getRawParameterValue (kParamJitter);
 	altParam = apvts.getRawParameterValue (kParamAlt);
 	feedbackParam = apvts.getRawParameterValue (kParamFeedback);
 	modParam = apvts.getRawParameterValue (kParamMod);
@@ -243,8 +243,8 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	freqEmaCoeff = freqEmaCoeffDefault_;
 	shapeSmoothed.reset (currentSampleRate, kShapeSmoothingSeconds);
 	shapeSmoothed.setCurrentAndTargetValue (shape);
-	variationSmoothed.reset (currentSampleRate, kVariationSmoothingSeconds);
-	variationSmoothed.setCurrentAndTargetValue (juce::jlimit (kVariationMin, kVariationMax, loadAtomicOrDefault (variationParam, kVariationDefault)));
+	jitterSmoothed.reset (currentSampleRate, kJitterSmoothingSeconds);
+	jitterSmoothed.setCurrentAndTargetValue (juce::jlimit (kJitterMin, kJitterMax, loadAtomicOrDefault (jitterParam, kJitterDefault)));
 	feedbackSmoothed.reset (currentSampleRate, kFeedbackSmoothingSeconds);
 	feedbackSmoothed.setCurrentAndTargetValue (juce::jlimit (kFeedbackMin, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault)));
 	feedbackLastL = 0.0f;
@@ -278,16 +278,15 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCoeffFreq = -1.0f;
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
-	variationFreqDrift_.reset();
-	variationShapeDrift_.reset();
-	variationFreqFast_.reset (0x44565031);
-	variationShapeFast_.reset (0x44565053);
-	variationFreqExtreme_.reset (0x44565831);
-	variationShapeExtreme_.reset (0x44565853);
-	variationFreqUltra_.reset (0x44565531);
-	variationShapeUltra_.reset (0x44565553);
-	variationHarmonicFreqPhase_ = 0.0f;
-	variationHarmonicShapePhase_ = 0.25f;
+	lastCoeffFreqR = -1.0f;
+	lastJitterCoeffFreq.fill (-1.0f);
+	lastJitterCoeffShape.fill (-1.0f);
+	lastJitterCoeffFreqR.fill (-1.0f);
+	lastJitterCoeffStages = -1;
+	for (int i = 0; i < kSeriesMax; ++i)
+		jitterLanes_[(size_t) i].reset (0x44564A4C + (juce::int64) i * 0x10001);
+	jitterFeedbackDrift_.reset();
+	jitterFeedbackFast_.reset (0x44564A46);
 
 	// Reset MIDI note tracking
 	lastMidiNote.store (-1, std::memory_order_relaxed);
@@ -425,6 +424,8 @@ void DisperserAudioProcessor::releaseResources()
 	for (auto& c : xfadeChainR) c.clear();
 	stageCoeff.clear();
 	stageCoeffR.clear();
+	for (auto& c : jitterStageCoeff) c.clear();
+	for (auto& c : jitterStageCoeffR) c.clear();
 }
 
 #if ! JucePlugin_PreferredChannelConfigurations
@@ -461,6 +462,10 @@ void DisperserAudioProcessor::resizeDspState (int stages, int series)
 	for (int i = 0; i < kSeriesMax; ++i)
 	{
 		const size_t newSize = (size_t) nStages;
+		if (jitterStageCoeff[(size_t) i].size() != coeffSize)
+			jitterStageCoeff[(size_t) i].assign (coeffSize, 0.0f);
+		if (jitterStageCoeffR[(size_t) i].size() != coeffSize)
+			jitterStageCoeffR[(size_t) i].assign (coeffSize, 0.0f);
 		if (chainL[(size_t) i].size() != newSize)
 			chainL[(size_t) i].assign (newSize, {});
 		if (chainR[(size_t) i].size() != newSize)
@@ -553,7 +558,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	const int targetSeries = juce::jlimit (kSeriesMin, kSeriesMax, loadIntParamOrDefault (seriesParam, kSeriesDefault));
 	float targetFreq = loadAtomicOrDefault (freqParam, kFreqDefault);
 	float targetShape = juce::jlimit (0.0f, 1.0f, loadAtomicOrDefault (shapeParam, kShapeDefault));
-	const float targetVariation = juce::jlimit (kVariationMin, kVariationMax, loadAtomicOrDefault (variationParam, kVariationDefault));
+	const float targetJitter = juce::jlimit (kJitterMin, kJitterMax, loadAtomicOrDefault (jitterParam, kJitterDefault));
 
 	// Debug overrides preserved.
 	if (loadBoolParamOrDefault (s0Param, false))
@@ -624,7 +629,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 	stagesSmoothed.setTargetValue ((float) targetStages);
 	shapeSmoothed.setTargetValue (targetShape);
-	variationSmoothed.setTargetValue (targetVariation);
+	jitterSmoothed.setTargetValue (targetJitter);
 	feedbackSmoothed.setTargetValue (targetFeedback);
 
 	// MIX (dry/wet)
@@ -702,6 +707,8 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		if (targetSeries > activeSeries)
 			clearStageRange (0, kAmountMax, targetSeries);
 		activeSeries = targetSeries;
+		coeffUpdateCountdown = 0;
+		lastJitterCoeffStages = -1;
 	}
 
 	auto* ch0 = buffer.getWritePointer (0);
@@ -993,9 +1000,11 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	if (tiltPre_) applyTilt();
 
 	const bool freqConverged = std::abs (smoothedFreqValue - targetFreq) < 0.01f;
-	const bool variationActive = targetVariation > 0.0001f
-	                          || variationSmoothed.isSmoothing()
-	                          || variationSmoothed.getCurrentValue() > 0.0001f;
+	const bool jitterActive = targetJitter > 0.0001f
+	                       || jitterSmoothed.isSmoothing()
+	                       || jitterSmoothed.getCurrentValue() > 0.0001f;
+	if (! jitterActive)
+		lastJitterCoeffStages = -1;
 
 	// Fast path: parameters converged + no crossfade -> tight inner loop
 	// without per-sample smoothing, coefficient checks, or fractional stages.
@@ -1003,7 +1012,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		&& !stagesSmoothed.isSmoothing()
 		&& freqConverged
 		&& !shapeSmoothed.isSmoothing()
-		&& !variationActive
+		&& !jitterActive
 		&& !feedbackSmoothed.isSmoothing())
 	{
 		smoothedFreqValue = targetFreq;   // snap EMA to avoid drift
@@ -1097,16 +1106,25 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		smoothedFreqValue += (targetFreq - smoothedFreqValue) * (1.0f - freqEmaCoeff);
 		float effectiveFreq = smoothedFreqValue;
 		float effectiveShape = shapeSmoothed.getNextValue();
-		if (variationActive)
+		float feedbackOffset = 0.0f;
+		const int jitterCoeffSeriesCount = jitterActive
+			? juce::jlimit (0, kSeriesMax, juce::jmax (activeSeries, crossfading ? previousSeries : activeSeries))
+			: 0;
+		if (jitterActive)
 		{
-			const float variationAmt = variationSmoothed.getNextValue();
-			float freqOctOffset = 0.0f;
-			float shapeOffset = 0.0f;
-			advanceVariation (variationAmt, effectiveFreq, freqOctOffset, shapeOffset);
-			effectiveFreq = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
-			effectiveShape = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
+			const float jitterAmt = jitterSmoothed.getNextValue();
+			for (int s = 0; s < jitterCoeffSeriesCount; ++s)
+			{
+				float freqOctOffset = 0.0f;
+				float shapeOffset = 0.0f;
+				advanceJitterLane (jitterLanes_[(size_t) s], jitterAmt, effectiveFreq, freqOctOffset, shapeOffset);
+				jitterSeriesFreq[(size_t) s] = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
+				jitterSeriesShape[(size_t) s] = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
+			}
+			feedbackOffset = advanceJitterFeedback (jitterAmt);
 		}
-		const float fb = feedbackSmoothed.getNextValue();
+		const float baseFb = feedbackSmoothed.getNextValue();
+		const float fb = jitterActive ? applyJitterToFeedback (baseFb, feedbackOffset) : baseFb;
 		float sourceL = ch0[n];
 		float sourceR = hasStereo ? ch1[n] : sourceL;
 
@@ -1129,10 +1147,14 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		{
 			// Batched coefficient update (every kCoeffUpdateInterval samples or on stage change)
 			--coeffUpdateCountdown;
-			if (coeffUpdateCountdown <= 0 || lastCoeffStages != coeffStages)
+			if (coeffUpdateCountdown <= 0
+				|| lastCoeffStages != coeffStages
+				|| (jitterActive && lastJitterCoeffStages != coeffStages)
+				|| (jitterActive && jitterCoeffSeriesCount > 0 && lastJitterCoeffFreq[(size_t) (jitterCoeffSeriesCount - 1)] < 0.0f))
 			{
 				coeffUpdateCountdown = kCoeffUpdateInterval;
-				if (lastCoeffStages != coeffStages
+				const bool baseStageChanged = (lastCoeffStages != coeffStages);
+				if (baseStageChanged
 					|| std::abs (effectiveFreq - lastCoeffFreq) > 0.001f
 					|| std::abs (effectiveShape - lastCoeffShape) > 0.0002f)
 				{
@@ -1141,16 +1163,44 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					lastCoeffFreq = effectiveFreq;
 					lastCoeffShape = effectiveShape;
 				}
-			}
 
-			// DUAL: update R coefficients in slow path
-			if (dualCoeffR)
-			{
-				const float freqR = effectiveFreq * 0.5f;
-				if (std::abs (freqR - lastCoeffFreqR) > 0.001f || lastCoeffStages != coeffStages)
+				// DUAL: update R coefficients in slow path
+				if (dualCoeffR)
 				{
-					updateCoefficientsInto (freqR, effectiveShape, coeffStages, stageCoeffR);
-					lastCoeffFreqR = freqR;
+					const float freqR = effectiveFreq * 0.5f;
+					if (baseStageChanged || std::abs (freqR - lastCoeffFreqR) > 0.001f)
+					{
+						updateCoefficientsInto (freqR, effectiveShape, coeffStages, stageCoeffR);
+						lastCoeffFreqR = freqR;
+					}
+				}
+
+				if (jitterActive)
+				{
+					const bool jitterStageChanged = (lastJitterCoeffStages != coeffStages);
+					for (int s = 0; s < jitterCoeffSeriesCount; ++s)
+					{
+						const size_t idx = (size_t) s;
+						if (jitterStageChanged
+							|| std::abs (jitterSeriesFreq[idx] - lastJitterCoeffFreq[idx]) > 0.001f
+							|| std::abs (jitterSeriesShape[idx] - lastJitterCoeffShape[idx]) > 0.0002f)
+						{
+							updateCoefficientsInto (jitterSeriesFreq[idx], jitterSeriesShape[idx], coeffStages, jitterStageCoeff[idx]);
+							lastJitterCoeffFreq[idx] = jitterSeriesFreq[idx];
+							lastJitterCoeffShape[idx] = jitterSeriesShape[idx];
+						}
+
+						if (dualCoeffR)
+						{
+							const float freqR = jitterSeriesFreq[idx] * 0.5f;
+							if (jitterStageChanged || std::abs (freqR - lastJitterCoeffFreqR[idx]) > 0.001f)
+							{
+								updateCoefficientsInto (freqR, jitterSeriesShape[idx], coeffStages, jitterStageCoeffR[idx]);
+								lastJitterCoeffFreqR[idx] = freqR;
+							}
+						}
+					}
+					lastJitterCoeffStages = coeffStages;
 				}
 			}
 
@@ -1163,12 +1213,15 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 			for (int s = 0; s < activeSeries; ++s)
 			{
-				auto* lStages = chainL[(size_t) s].data();
-				auto* rStages = chainR[(size_t) s].data();
+				const size_t seriesIdx = (size_t) s;
+				const auto& coeffs = jitterActive ? jitterStageCoeff[seriesIdx] : stageCoeff;
+				const auto& coeffsR = jitterActive ? jitterStageCoeffR[seriesIdx] : stageCoeffR;
+				auto* lStages = chainL[seriesIdx].data();
+				auto* rStages = chainR[seriesIdx].data();
 
 				for (int st = 0; st < baseStages; ++st)
 				{
-					const float aRaw = stageCoeff[(size_t) st];
+					const float aRaw = coeffs[(size_t) st];
 					const float a = (altEnabled && (st & 1)) ? -aRaw : aRaw;
 
 					auto& sl = lStages[st];
@@ -1178,7 +1231,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 					if (processR)
 					{
-						const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -stageCoeffR[(size_t) st] : stageCoeffR[(size_t) st]) : a);
+						const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -coeffsR[(size_t) st] : coeffsR[(size_t) st]) : a);
 						auto& sr = rStages[st];
 						const float yR = (-aR * xR) + sr.z1;
 						sr.z1 = xR + (aR * yR);
@@ -1189,7 +1242,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				if (useFractionalStage)
 				{
 					const int st = baseStages;
-					const float aRaw = stageCoeff[(size_t) st];
+					const float aRaw = coeffs[(size_t) st];
 					const float a = (altEnabled && (st & 1)) ? -aRaw : aRaw;
 
 					const float inL = xL;
@@ -1200,7 +1253,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 					if (processR)
 					{
-						const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -stageCoeffR[(size_t) st] : stageCoeffR[(size_t) st]) : a);
+						const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -coeffsR[(size_t) st] : coeffsR[(size_t) st]) : a);
 						const float inR = xR;
 						auto& sr = rStages[st];
 						const float yR = (-aR * inR) + sr.z1;
@@ -1218,12 +1271,15 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 				for (int s = 0; s < previousSeries; ++s)
 				{
-					auto* lStages = xfadeChainL[(size_t) s].data();
-					auto* rStages = xfadeChainR[(size_t) s].data();
+					const size_t seriesIdx = (size_t) s;
+					const auto& coeffs = jitterActive ? jitterStageCoeff[seriesIdx] : stageCoeff;
+					const auto& coeffsR = jitterActive ? jitterStageCoeffR[seriesIdx] : stageCoeffR;
+					auto* lStages = xfadeChainL[seriesIdx].data();
+					auto* rStages = xfadeChainR[seriesIdx].data();
 
 					for (int st = 0; st < baseStages; ++st)
 					{
-						const float aRaw = stageCoeff[(size_t) st];
+						const float aRaw = coeffs[(size_t) st];
 						const float a = (altEnabled && (st & 1)) ? -aRaw : aRaw;
 
 						auto& sl = lStages[st];
@@ -1233,7 +1289,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 						if (processR)
 						{
-							const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -stageCoeffR[(size_t) st] : stageCoeffR[(size_t) st]) : a);
+							const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -coeffsR[(size_t) st] : coeffsR[(size_t) st]) : a);
 							auto& sr = rStages[st];
 							const float yR = (-aR * xfR) + sr.z1;
 							sr.z1 = xfR + (aR * yR);
@@ -1244,7 +1300,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					if (useFractionalStage)
 					{
 						const int st = baseStages;
-						const float aRaw = stageCoeff[(size_t) st];
+						const float aRaw = coeffs[(size_t) st];
 						const float a = (altEnabled && (st & 1)) ? -aRaw : aRaw;
 
 						const float inL = xfL;
@@ -1255,7 +1311,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
 						if (processR)
 						{
-							const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -stageCoeffR[(size_t) st] : stageCoeffR[(size_t) st]) : a);
+							const float aR = negateCoeffR ? -a : (dualCoeffR ? ((altEnabled && (st & 1)) ? -coeffsR[(size_t) st] : coeffsR[(size_t) st]) : a);
 							const float inR = xfR;
 							auto& sr = rStages[st];
 							const float yR = (-aR * inR) + sr.z1;
@@ -1680,8 +1736,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 		juce::NormalisableRange<float> (0.0f, 1.0f, 0.0f, 1.0f), kShapeDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
-		kParamVariation, "Variation",
-		juce::NormalisableRange<float> (kVariationMin, kVariationMax, 0.001f), kVariationDefault));
+		kParamJitter, "Jitter",
+		juce::NormalisableRange<float> (kJitterMin, kJitterMax, 0.001f), kJitterDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterBool> (kParamAlt, "Alt", false));
 
