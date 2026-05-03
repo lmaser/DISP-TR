@@ -256,6 +256,10 @@ private:
 	static constexpr float kVariationUltraMaxHz = 120.0f;
 	static constexpr float kVariationUltraBlendMax = 0.06f;
 	static constexpr float kVariationUltraStart = 0.90f;
+	static constexpr float kVariationHarmonicMinHz = 35.0f;
+	static constexpr float kVariationHarmonicMaxHz = 90.0f;
+	static constexpr float kVariationHarmonicBlendMax = 0.035f;
+	static constexpr float kVariationHarmonicStart = 0.95f;
 	static constexpr float kVariationCombinedLimit = 1.25f;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
@@ -543,8 +547,28 @@ private:
 	VariationSmoothSH variationShapeExtreme_;
 	VariationSmoothSH variationFreqUltra_;
 	VariationSmoothSH variationShapeUltra_;
+	float variationHarmonicFreqPhase_ = 0.0f;
+	float variationHarmonicShapePhase_ = 0.25f;
 
-	inline void advanceVariation (float amount, float& freqOctOffset, float& shapeOffset) noexcept
+	static float foldVariationHarmonicRate (float rateHz) noexcept
+	{
+		float rate = juce::jlimit (0.01f, 40000.0f, rateHz);
+		while (rate > kVariationHarmonicMaxHz)
+			rate *= 0.5f;
+		while (rate < kVariationHarmonicMinHz)
+			rate *= 2.0f;
+		return juce::jlimit (kVariationHarmonicMinHz, kVariationHarmonicMaxHz, rate);
+	}
+
+	static float advanceVariationSine (float& phase, float rateHz, float sampleRate) noexcept
+	{
+		phase += rateHz / juce::jmax (1.0f, sampleRate);
+		if (phase >= 1.0f)
+			phase -= std::floor (phase);
+		return std::sin (phase * kTwoPi);
+	}
+
+	inline void advanceVariation (float amount, float baseFreqHz, float& freqOctOffset, float& shapeOffset) noexcept
 	{
 		const float amt = juce::jlimit (0.0f, 1.0f, amount);
 		if (amt <= 0.000001f)
@@ -568,17 +592,26 @@ private:
 		const float ultraMix = ultraNorm * ultraNorm * ultraNorm * ultraNorm;
 		const float ultraRate = kVariationUltraMinHz + (kVariationUltraMaxHz - kVariationUltraMinHz) * ultraMix;
 		const float ultraWeight = ultraMix * kVariationUltraBlendMax;
+		const float harmonicNorm = juce::jlimit (0.0f, 1.0f, (amt - kVariationHarmonicStart) / (1.0f - kVariationHarmonicStart));
+		const float harmonicMix = harmonicNorm * harmonicNorm * harmonicNorm * harmonicNorm;
+		const float harmonicWeight = harmonicMix * kVariationHarmonicBlendMax;
+		const float harmonicRate = harmonicWeight > 0.0f ? foldVariationHarmonicRate (baseFreqHz * 2.0f) : kVariationHarmonicMinHz;
+		const float harmonicShapeRate = harmonicWeight > 0.0f ? foldVariationHarmonicRate (harmonicRate * 1.5f) : kVariationHarmonicMinHz;
+		const float harmonicFreq = harmonicWeight > 0.0f ? advanceVariationSine (variationHarmonicFreqPhase_, harmonicRate, sr) * harmonicWeight : 0.0f;
+		const float harmonicShape = harmonicWeight > 0.0f ? advanceVariationSine (variationHarmonicShapePhase_, harmonicShapeRate, sr) * harmonicWeight : 0.0f;
 
 		const float freqCombined = juce::jlimit (-kVariationCombinedLimit, kVariationCombinedLimit,
 			variationFreqDrift_.advance (baseRate, sr)
 				+ variationFreqFast_.advance (fastRate, sr) * fastWeight
 				+ variationFreqExtreme_.advance (extremeRate, sr) * extremeWeight
-				+ variationFreqUltra_.advance (ultraRate, sr) * ultraWeight);
+				+ variationFreqUltra_.advance (ultraRate, sr) * ultraWeight
+				+ harmonicFreq);
 		const float shapeCombined = juce::jlimit (-kVariationCombinedLimit, kVariationCombinedLimit,
 			variationShapeDrift_.advance (baseRate * 1.37f, sr)
 				+ variationShapeFast_.advance (fastRate * 0.73f, sr) * fastWeight
 				+ variationShapeExtreme_.advance (extremeRate * 0.61f, sr) * extremeWeight
-				+ variationShapeUltra_.advance (ultraRate * 0.67f, sr) * ultraWeight);
+				+ variationShapeUltra_.advance (ultraRate * 0.67f, sr) * ultraWeight
+				+ harmonicShape);
 
 		freqOctOffset = freqCombined * amt * kVariationFreqDepthOct;
 		shapeOffset = shapeCombined * amt * kVariationShapeDepth;

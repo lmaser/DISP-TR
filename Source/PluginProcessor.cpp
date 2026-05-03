@@ -286,6 +286,8 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	variationShapeExtreme_.reset (0x44565853);
 	variationFreqUltra_.reset (0x44565531);
 	variationShapeUltra_.reset (0x44565553);
+	variationHarmonicFreqPhase_ = 0.0f;
+	variationHarmonicShapePhase_ = 0.25f;
 
 	// Reset MIDI note tracking
 	lastMidiNote.store (-1, std::memory_order_relaxed);
@@ -1100,7 +1102,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			const float variationAmt = variationSmoothed.getNextValue();
 			float freqOctOffset = 0.0f;
 			float shapeOffset = 0.0f;
-			advanceVariation (variationAmt, freqOctOffset, shapeOffset);
+			advanceVariation (variationAmt, effectiveFreq, freqOctOffset, shapeOffset);
 			effectiveFreq = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
 			effectiveShape = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
 		}
