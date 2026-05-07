@@ -285,8 +285,7 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastJitterCoeffStages = -1;
 	for (int i = 0; i < kSeriesMax; ++i)
 		jitterLanes_[(size_t) i].reset (0x44564A4C + (juce::int64) i * 0x10001);
-	jitterFeedbackDrift_.reset();
-	jitterFeedbackFast_.reset (0x44564A46);
+	jitterFeedbackMod_.reset (0x44564A46ll, 0.381f);
 
 	// Reset MIDI note tracking
 	lastMidiNote.store (-1, std::memory_order_relaxed);
@@ -1106,25 +1105,31 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		smoothedFreqValue += (targetFreq - smoothedFreqValue) * (1.0f - freqEmaCoeff);
 		float effectiveFreq = smoothedFreqValue;
 		float effectiveShape = shapeSmoothed.getNextValue();
-		float feedbackOffset = 0.0f;
+		float feedbackJitterOut = 0.0f;
+		float feedbackJitterDepth = 0.0f;
 		const int jitterCoeffSeriesCount = jitterActive
 			? juce::jlimit (0, kSeriesMax, juce::jmax (activeSeries, crossfading ? previousSeries : activeSeries))
 			: 0;
 		if (jitterActive)
 		{
 			const float jitterAmt = jitterSmoothed.getNextValue();
+			const float equivalentDelaySamples = calcJitterEquivalentDelaySamples (
+				effectiveFreq, smoothedStages, juce::jmax (1, jitterCoeffSeriesCount));
+
 			for (int s = 0; s < jitterCoeffSeriesCount; ++s)
 			{
 				float freqOctOffset = 0.0f;
 				float shapeOffset = 0.0f;
-				advanceJitterLane (jitterLanes_[(size_t) s], jitterAmt, effectiveFreq, freqOctOffset, shapeOffset);
+				advanceJitterLane (jitterLanes_[(size_t) s], jitterAmt, equivalentDelaySamples,
+				                   s, freqOctOffset, shapeOffset);
 				jitterSeriesFreq[(size_t) s] = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
 				jitterSeriesShape[(size_t) s] = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
 			}
-			feedbackOffset = advanceJitterFeedback (jitterAmt);
+
+			advanceJitterFeedback (jitterAmt, equivalentDelaySamples, feedbackJitterOut, feedbackJitterDepth);
 		}
 		const float baseFb = feedbackSmoothed.getNextValue();
-		const float fb = jitterActive ? applyJitterToFeedback (baseFb, feedbackOffset) : baseFb;
+		const float fb = jitterActive ? applyJitterToFeedback (baseFb, feedbackJitterOut, feedbackJitterDepth) : baseFb;
 		float sourceL = ch0[n];
 		float sourceR = hasStereo ? ch1[n] : sourceL;
 

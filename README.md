@@ -72,14 +72,14 @@ Controls how far the per-stage frequencies spread around the center frequency.
 
 ### JIT (0-100%)
 
-Adds deterministic internal jitter to the disperser by modulating the effective `FREQUENCY` and `SHAPE` targets, with a very small bounded feedback offset.
+Adds deterministic internal jitter to the disperser by modulating the effective `FREQUENCY` and `SHAPE` targets, with feedback magnitude movement derived from the same timing model.
 
 - Low values: slow, organic drift
 - Mid values: added smooth sample-and-hold movement
-- High values: faster extreme layers for more animated instability
-- Near `100%`: a very small harmonic/ring-like layer adds extra crunch without directly distorting the audio
+- High values: faster tonal flutter and stronger animated instability
+- Higher `STAGES` and `SERIES` increase the equivalent all-pass delay time, so jitter moves more slowly and feels more structural
 
-The frequency and shape movement uses independent deterministic lanes per active `SERIES`, while feedback jitter stays global because feedback is injected before the full all-pass chain. The modulation is smoothed, bounded, and seeded deterministically so repeated sessions keep a stable character.
+The frequency and shape movement uses independent deterministic lanes per active `SERIES`, while feedback jitter stays global because feedback is injected before the full all-pass chain. The modulation is smoothed, bounded, and seeded deterministically so repeated sessions keep a stable character. Feedback jitter is multiplicative and sign-preserving, so `0%` feedback does not generate sound and negative feedback never flips polarity unexpectedly.
 
 ### FEEDBACK (-100 to +100%)
 
@@ -259,7 +259,7 @@ This ordering is important: DISP-TR is not just "all-pass, then mix". The IO sec
 - **All-pass stage**: first-order topology with per-stage state
 - **Coefficient mapping**: frequency is converted to all-pass coefficient space from the current sample rate
 - **Stage distribution**: `SHAPE` spreads stage frequencies around the center with a non-linear mapping
-- **Jitter**: `JIT` layers deterministic drift, smooth sample-and-hold movement, and an extreme harmonic micro-layer over per-series frequency/shape targets, plus a small bounded feedback offset
+- **Jitter**: `JIT` uses the ECHO-TR timing-instability model over a DISP-TR equivalent delay (`STAGES x SERIES x all-pass group delay`), then applies deterministic slow/fast sample-and-hold plus tonal flutter to per-series frequency/shape targets and global feedback magnitude
 - **Feedback**: bipolar and sign-preserving
 - **Series topology**: changing `SERIES` crossfades between old and new chain counts
 - **Fast path**: when smoothed parameters have settled and no series crossfade is active, the processor uses a tighter inner loop
@@ -311,7 +311,7 @@ DISP-TR stores:
 Current v1.4 state includes:
 
 - bipolar feedback from `-100%` to `+100%`
-- `JIT` movement for deterministic per-series frequency/shape jitter, subtle feedback motion, and high-range harmonic crunch
+- `JIT` movement for deterministic per-series frequency/shape jitter and sign-preserving feedback magnitude instability based on the same timing model as ECHO-TR
 - dual-target chaos (`CHSF` and `CHSD`)
 - wet-path HP/LP filters with slope selection
 - IO routing section with `MODE IN`, `MODE OUT`, `SUM BUS`, `MIX MODE`, `FILTER POS`, `INV POL`, and `INV STR`
