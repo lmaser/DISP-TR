@@ -244,7 +244,7 @@ private:
 	static constexpr float kMidiGlideTauMax  = 0.200f;
 	static constexpr float kMidiGlideTauMin  = 0.0002f;
 	static constexpr double kShapeSmoothingSeconds = 0.05;
-	static constexpr double kJitterSmoothingSeconds = 0.05;
+	static constexpr double kJitterSmoothingSeconds = 0.0325;
 	static constexpr float kJitterEpsilon = 0.000001f;
 	static constexpr float kJitterMinDelaySamples = 2.0f;
 	static constexpr float kJitterMinDelayMs = 0.05f;
@@ -640,8 +640,7 @@ private:
 	inline JitterMetrics makeJitterMetrics (float baseDelaySamples, float amount, float sr, int laneIndex) const noexcept
 	{
 		JitterMetrics m;
-		const float a = juce::jlimit (0.0f, 1.0f, amount);
-		m.amountMapped = a;
+		m.amountMapped = juce::jlimit (0.0f, 1.0f, amount);
 
 		m.delayMs = juce::jmax (kJitterMinDelayMs, juce::jmax (kJitterMinDelaySamples, baseDelaySamples) * 1000.0f / sr);
 		const float delaySeconds = m.delayMs * 0.001f;
