@@ -199,7 +199,7 @@ MIDI velocity influences glide speed, and the channel can be set to omni or a sp
 Dual-target chaos system for movement and instability.
 
 - **CHSF**: Modulates the wet filter cutoffs
-- **CHSD**: Adds pre-core micro-delay decorrelation and a subtle wet gain movement
+- **CHSD**: Adds mono-linked pre-core micro-delay movement and subtle wet gain movement
 
 Each target has its own enable toggle.
 Both use amount and speed controls in their popup editor:
@@ -236,7 +236,7 @@ At a high level, DISP-TR processes signal like this:
 2. `MODE IN` matrix is applied to the wet branch
 3. Optional HP/LP filter if `FILTER POS` puts the filter block in `PRE`
 4. Optional tilt EQ if `FILTER POS` puts tilt in `PRE`
-5. Optional `CHSD` pre-core micro-delay decorrelation and subtle gain movement
+5. Optional `CHSD` mono-linked pre-core micro-delay movement and subtle gain movement
 6. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `ALT`, `FEEDBACK`, `STYLE`, MIDI note tracking)
 7. Optional HP/LP filter if the filter block is in `POST`
 8. Optional tilt EQ if tilt is in `POST`
@@ -284,7 +284,7 @@ This keeps rapid GUI movement and automation from producing unnecessary zipperin
 
 - Wet HP/LP filters use biquad-based filtering with selectable slopes
 - `CHSF` modulates filter cutoff movement
-- `CHSD` applies pre-core micro-delay decorrelation and subtle gain movement
+- `CHSD` applies mono-linked pre-core micro-delay movement and subtle gain movement, keeping the delay component mono-safe while gain movement can still add width
 - Chaos motion uses Hermite interpolation plus drift to stay smooth and less mechanical
 
 ### Gain and Safety

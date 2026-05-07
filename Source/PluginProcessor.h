@@ -876,12 +876,11 @@ private:
 				chaosGRng_[c], period, chaosAmtNormD_, sr);
 		}
 
-		// Mono chaos: copy ch0 to ch1.
+		// Delay modulation is mono-linked to avoid mono-sum phaser artifacts.
+		// Gain modulation may stay stereo for width when the style supports it.
+		chaosDOut_[1] = chaosDOut_[0];
 		if (! chaosStereo_)
-		{
-			chaosDOut_[1] = chaosDOut_[0];
 			chaosGOut_[1] = chaosGOut_[0];
-		}
 	}
 
 	inline void applyChaosDelay (float& wetL, float& wetR) noexcept
