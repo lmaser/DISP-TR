@@ -941,6 +941,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
     seriesSlider.setRange ((double) DisperserAudioProcessor::kSeriesMin,
                            (double) DisperserAudioProcessor::kSeriesMax,
                            1.0);
+    seriesSlider.setAllowNumericPopup (false);
     styleSlider.setRange (0, 3, 1);
     styleSlider.setAllowNumericPopup (false);
     limThresholdSlider.setAllowNumericPopup (true);
@@ -4908,7 +4909,8 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     {
         if (auto* slider = getSliderForValueAreaPoint (p))
         {
-            openNumericEntryPopupForSlider (*slider);
+            if (slider != &seriesSlider)
+                openNumericEntryPopupForSlider (*slider);
             return;
         }
     }
