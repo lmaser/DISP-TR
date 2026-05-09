@@ -61,7 +61,7 @@ private:
 
         juce::String getTextFromValue (double v) override
         {
-                if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->jitterSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
+            if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->jitterSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
             {
                 double percent = v * 100.0;
                 return juce::String (percent, 1);
@@ -86,8 +86,8 @@ private:
                 return juce::String (rounded3, 3);
             }
 
-            // For input/output gain (dB)
-            if (owner != nullptr && (this == &owner->inputSlider || this == &owner->outputSlider))
+            if (owner != nullptr && (this == &owner->inputSlider || this == &owner->outputSlider
+                || this == &owner->tiltSlider || this == &owner->limThresholdSlider))
             {
                 const double rounded1 = std::round (v * 10.0) / 10.0;
                 return juce::String (rounded1, 1);
@@ -377,6 +377,7 @@ private:
         juce::Font getComboBoxFont (juce::ComboBox&) override;
         void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
         {
+            label.setFont (getComboBoxFont (box));
             label.setBounds (1, 1, box.getWidth() - 2, box.getHeight() - 2);
             label.setJustificationType (juce::Justification::centred);
         }
@@ -537,9 +538,9 @@ private:
     static constexpr double kDefaultOutput   = (double) DisperserAudioProcessor::kOutputDefault;
 
     static constexpr int kMinW = 360;
-    static constexpr int kMinH = 660;
+    static constexpr int kMinH = 740;
     static constexpr int kMaxW = 800;
-    static constexpr int kMaxH = 760;
+    static constexpr int kMaxH = 820;
 
     static constexpr int kLayoutVerticalBiasPx = 10;
 
