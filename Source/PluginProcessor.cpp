@@ -1511,30 +1511,16 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	}
 
 	// Apply wet Input/Output gain before WET limiting and dry/wet blending.
-	if (needsDryBlend && sumBusVal != 0 && numChannels >= 2)
 	{
-		float* left = buffer.getWritePointer (0);
-		float* right = buffer.getWritePointer (1);
+		auto* const* wetChannels = buffer.getArrayOfWritePointers();
 		for (int n = 0; n < numSamples; ++n)
 		{
 			smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
 			smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
 			const float wetGain = smoothedInputGain * smoothedOutputGain;
-			left[n] *= wetGain;
-			right[n] *= wetGain;
-		}
-	}
-	else
-	{
-		for (int ch = 0; ch < numChannels; ++ch)
-		{
-			float* data = buffer.getWritePointer (ch);
-			for (int n = 0; n < numSamples; ++n)
-			{
-				smoothedInputGain  = smoothedInputGain  * kGainSmoothCoeff + inputGain  * (1.0f - kGainSmoothCoeff);
-				smoothedOutputGain = smoothedOutputGain * kGainSmoothCoeff + outputGain * (1.0f - kGainSmoothCoeff);
-				data[n] *= smoothedInputGain * smoothedOutputGain;
-			}
+
+			for (int ch = 0; ch < numChannels; ++ch)
+				wetChannels[ch][n] *= wetGain;
 		}
 	}
 
@@ -1569,22 +1555,24 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		if (sumBusVal == 0 || numChannels < 2)
 		{
 			// ST (stereo passthrough)
-			for (int ch = 0; ch < juce::jmin (numChannels, dryBuffer.getNumChannels()); ++ch)
-			{
-				const float* dry = dryBuffer.getReadPointer (ch);
-				float* wet = buffer.getWritePointer (ch);
-				for (int n = 0; n < numSamples; ++n)
-				{
-					smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
-					smoothedDryLevel   = smoothedDryLevel   * kGainSmoothCoeff + dryLevelTarget * (1.0f - kGainSmoothCoeff);
-					smoothedWetLevel   = smoothedWetLevel   * kGainSmoothCoeff + wetLevelTarget * (1.0f - kGainSmoothCoeff);
+			const int blendChannels = juce::jmin (numChannels, dryBuffer.getNumChannels());
+			auto* const* dryChannels = dryBuffer.getArrayOfReadPointers();
+			auto* const* wetChannels = buffer.getArrayOfWritePointers();
 
-					const float dryS = dry[n];
-					const float wetS = wet[n];
+			for (int n = 0; n < numSamples; ++n)
+			{
+				smoothedMix        = smoothedMix        * kGainSmoothCoeff + mixValue   * (1.0f - kGainSmoothCoeff);
+				smoothedDryLevel   = smoothedDryLevel   * kGainSmoothCoeff + dryLevelTarget * (1.0f - kGainSmoothCoeff);
+				smoothedWetLevel   = smoothedWetLevel   * kGainSmoothCoeff + wetLevelTarget * (1.0f - kGainSmoothCoeff);
+
+				for (int ch = 0; ch < blendChannels; ++ch)
+				{
+					const float dryS = dryChannels[ch][n];
+					const float wetS = wetChannels[ch][n];
 					if (mixMode == 0)
-						wet[n] = dryS + smoothedMix * (wetS - dryS);
+						wetChannels[ch][n] = dryS + smoothedMix * (wetS - dryS);
 					else
-						wet[n] = dryS * smoothedDryLevel + wetS * smoothedWetLevel;
+						wetChannels[ch][n] = dryS * smoothedDryLevel + wetS * smoothedWetLevel;
 				}
 			}
 		}

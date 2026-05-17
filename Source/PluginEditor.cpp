@@ -49,8 +49,26 @@ static juce::String formatGainFaderDb (float dB)
     if (isGainFaderFloor (dB))
         return "-INF dB";
     if (std::abs (dB) < 0.05f)
-        return "0 dB";
+        return "0.0 dB";
     return juce::String (dB, 1) + " dB";
+}
+
+static juce::String formatGainFaderDbCompact (float dB)
+{
+    if (isGainFaderFloor (dB))
+        return "-INFdB";
+    if (std::abs (dB) < 0.05f)
+        return "0.0dB";
+    return juce::String (dB, 1) + "dB";
+}
+
+static juce::String formatFilterPromptFrequency (float hz)
+{
+    if (hz >= 1000.0f)
+        return juce::String (hz, 2);
+    if (hz >= 100.0f)
+        return juce::String (hz, 1);
+    return juce::String (hz, 2);
 }
 
 static constexpr double kModCenter  = 0.5;
@@ -415,7 +433,7 @@ void DisperserAudioProcessorEditor::DualMixBarComponent::updateTooltipForTarget 
     const float level = (target == DRY) ? dryLevel_ : wetLevel_;
     const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
     const juce::String label = (target == DRY) ? "DRY" : "WET";
-    setTooltip (dB <= -100.0f ? (label + ": -INF dB") : (label + ": " + juce::String (dB, 1) + " dB"));
+    setTooltip (dB <= -100.0f ? (label + " -INF dB") : (label + " " + juce::String (dB, 1) + " dB"));
 }
 
 void DisperserAudioProcessorEditor::DualMixBarComponent::updateFromProcessor()
@@ -583,12 +601,12 @@ void DisperserAudioProcessorEditor::FilterBarComponent::updateTooltipForTarget (
     if (target == HP)
     {
         const int hz = juce::roundToInt (hpFreq_);
-        setTooltip ("HP: " + juce::String (hz) + " Hz");
+        setTooltip ("HP " + juce::String (hz) + " Hz");
     }
     else if (target == LP)
     {
         const int hz = juce::roundToInt (lpFreq_);
-        setTooltip ("LP: " + juce::String (hz) + " Hz");
+        setTooltip ("LP " + juce::String (hz) + " Hz");
     }
     else
     {
@@ -1380,14 +1398,14 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     const int seriesV = (int) std::llround (seriesSlider.getValue());
     const double hz = freqSlider.getValue();
     const double shapeV = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
-    const juce::String shapePct = juce::String (shapeV * 100.0, 1);
+    const int shapePct = (int) std::lround (shapeV * 100.0);
     const double jitterV = juce::jlimit (0.0, 1.0, jitterSlider.getValue());
     const int jitterPct = (int) std::lround (jitterV * 100.0);
     const double fbV = juce::jlimit (-1.0, 1.0, feedbackSlider.getValue());
     const int fbPct = (int) std::lround (fbV * 100.0);
     const float modMult = (float) modSliderToMultiplier (modSlider.getValue());
     const double mixV = juce::jlimit (0.0, 1.0, mixSlider.getValue());
-    const juce::String mixPct = juce::String (mixV * 100.0, 1);
+    const int mixPct = (int) std::lround (mixV * 100.0);
     const float limDb = (float) limThresholdSlider.getValue();
 
     const auto oldAmountFullLen = cachedAmountTextFull.length();
@@ -1438,9 +1456,9 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
                                 .upToFirstOccurrenceOf (" Hz", false, false);
     }
 
-    cachedShapeTextFull = shapePct + "% SHAPE";
-    cachedShapeTextShort = shapePct + "% SHP";
-    cachedShapeIntOnly = shapePct + "%";
+    cachedShapeTextFull = juce::String (shapePct) + "% SHAPE";
+    cachedShapeTextShort = juce::String (shapePct) + "% SHP";
+    cachedShapeIntOnly = juce::String (shapePct) + "%";
 
     cachedJitterTextFull = juce::String (jitterPct).toUpperCase() + "% JIT";
     cachedJitterTextShort = juce::String (jitterPct).toUpperCase() + "% JIT";
@@ -1449,7 +1467,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedStyleTextFull  = getStyleText();
     cachedStyleTextShort = getStyleTextShort();
 
-    cachedFeedbackTextFull = juce::String (fbPct) + "% FEEDBACK";
+    cachedFeedbackTextFull = juce::String (fbPct) + "% FBK";
     cachedFeedbackTextShort = juce::String (fbPct) + "% FBK";
     cachedFeedbackIntOnly = juce::String (fbPct) + "%";
 
@@ -1475,22 +1493,19 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
         const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
         const juce::String suffix = isDry ? " DRY" : " WET";
         if (dB <= -100.0f) cachedMixIntOnly = "-INF" + suffix;
-        else if (std::abs (dB) < 0.05f) cachedMixIntOnly = "0dB" + suffix;
+        else if (std::abs (dB) < 0.05f) cachedMixIntOnly = "0.0dB" + suffix;
         else cachedMixIntOnly = juce::String ((int) dB) + "dB" + suffix;
     }
     else
     {
-        cachedMixIntOnly = mixPct + "%";
+        cachedMixIntOnly = juce::String (mixPct) + "%";
     }
 
     cachedTiltTextFull = getTiltText();
     cachedTiltTextShort = getTiltTextShort();
     {
         const float tiltVal = (float) tiltSlider.getValue();
-        if (std::abs (tiltVal) < 0.05f)
-            cachedTiltIntOnly = "0dB";
-        else
-            cachedTiltIntOnly = juce::String ((int) tiltVal) + "dB";
+        cachedTiltIntOnly = (std::abs (tiltVal) < 0.05f) ? "0.0dB" : (juce::String (tiltVal, 1) + "dB");
     }
 
     cachedInputTextFull = getInputText();
@@ -1500,7 +1515,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
         if (isGainFaderFloor (inDb))
             cachedInputIntOnly = "-INF";
         else
-            cachedInputIntOnly = juce::String ((int) inputSlider.getValue()) + "dB";
+            cachedInputIntOnly = formatGainFaderDbCompact (inDb);
     }
 
     cachedOutputTextFull = getOutputText();
@@ -1510,7 +1525,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
         if (isGainFaderFloor (outDb))
             cachedOutputIntOnly = "-INF";
         else
-            cachedOutputIntOnly = juce::String ((int) outputSlider.getValue()) + "dB";
+            cachedOutputIntOnly = formatGainFaderDbCompact (outDb);
     }
 
     cachedFilterTextFull  = getFilterText();
@@ -1523,13 +1538,13 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
         const auto limText = juce::String (std::abs (limDb) < 0.05f ? 0.0f : limDb, 1);
         if (limDb >= -0.05f)
         {
-            cachedLimThresholdTextFull  = "0.0 dB LIMIT";
+            cachedLimThresholdTextFull  = "0.0 dB LIM";
             cachedLimThresholdTextShort = "0.0 dB LIM";
             cachedLimThresholdIntOnly   = "0.0dB";
         }
         else
         {
-            cachedLimThresholdTextFull  = limText + " dB LIMIT";
+            cachedLimThresholdTextFull  = limText + " dB LIM";
             cachedLimThresholdTextShort = limText + " dB LIM";
             cachedLimThresholdIntOnly   = limText + "dB";
         }
@@ -1990,6 +2005,9 @@ static void layoutInfoPopupContent (juce::AlertWindow& aw)
 
 void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider& s)
 {
+    if (&s == &seriesSlider || &s == &styleSlider)
+        return;
+
     lnf.setScheme (activeScheme);
 
     const auto scheme = activeScheme;
@@ -1999,11 +2017,10 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     const bool isPercentPrompt = (&s == &shapeSlider || &s == &jitterSlider || &s == &feedbackSlider || &s == &mixSlider || &s == &panSlider);
 
     if (&s == &amountSlider)       { suffix = " STAGES";  suffixShort = " STG"; }
-    else if (&s == &seriesSlider)  { suffix = " SERIES";  suffixShort = " SRS"; }
     else if (&s == &freqSlider)    { suffix = " Hz";      suffixShort = " Hz"; }
-    else if (&s == &shapeSlider)   { suffix = " % SHAPE"; suffixShort = " %"; }
+    else if (&s == &shapeSlider)   { suffix = " % SHP";   suffixShort = " % SHP"; }
     else if (&s == &jitterSlider) { suffix = " % JIT";   suffixShort = " %"; }
-    else if (&s == &feedbackSlider){ suffix = " % FEEDBACK"; suffixShort = " % FBK"; }
+    else if (&s == &feedbackSlider){ suffix = " % FBK";   suffixShort = " % FBK"; }
     else if (&s == &modSlider)     { suffix = " X MOD";   suffixShort = " X"; }
     else if (&s == &mixSlider)     { suffix = " % MIX";   suffixShort = " %"; }
     else if (&s == &panSlider)     { suffix = " % PAN";   suffixShort = " %"; }
@@ -2021,18 +2038,16 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
     juce::String currentDisplay;
     if (&s == &amountSlider)
         currentDisplay = juce::String ((int) s.getValue());
-    else if (&s == &seriesSlider)
-        currentDisplay = juce::String ((int) s.getValue());
     else if (&s == &freqSlider)
         currentDisplay = juce::String (s.getValue(), 3);
     else if (&s == &shapeSlider)
-        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 1);
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 2);
     else if (&s == &jitterSlider)
-        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 1);
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 2);
     else if (&s == &feedbackSlider)
         currentDisplay = juce::String (juce::jlimit (-100.0, 100.0, s.getValue() * 100.0), 2);
     else if (&s == &mixSlider)
-        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 1);
+        currentDisplay = juce::String (juce::jlimit (0.0, 100.0, s.getValue() * 100.0), 2);
     else if (&s == &modSlider)
         currentDisplay = juce::String (modSliderToMultiplier (s.getValue()), 2);
     else if (&s == &inputSlider)
@@ -2075,12 +2090,11 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
 
         juce::String worstCaseText;
         if (&s == &amountSlider)       worstCaseText = "256";
-        else if (&s == &seriesSlider)  worstCaseText = "4";
         else if (&s == &freqSlider)    worstCaseText = "20000.000";
-        else if (&s == &shapeSlider)   worstCaseText = "100.0";
-        else if (&s == &jitterSlider) worstCaseText = "100.0";
+        else if (&s == &shapeSlider)   worstCaseText = "100.00";
+        else if (&s == &jitterSlider) worstCaseText = "100.00";
         else if (&s == &feedbackSlider)worstCaseText = "100.00";
-        else if (&s == &mixSlider)     worstCaseText = "100.0";
+        else if (&s == &mixSlider)     worstCaseText = "100.00";
         else if (&s == &modSlider)     worstCaseText = "4.00";
         else if (&s == &panSlider)     worstCaseText = "100";
         else if (&s == &inputSlider)   worstCaseText = "-144.0";
@@ -2166,12 +2180,6 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
             maxDecs = 0;
             maxLen = 3;
         }
-        else if (&s == &seriesSlider)
-        {
-            maxVal = 4.0;
-            maxDecs = 0;
-            maxLen = 1;
-        }
         else if (&s == &freqSlider)
         {
             maxVal = 20000.0;
@@ -2182,29 +2190,29 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
         {
             minVal = 0.0;
             maxVal = 100.0;
-            maxDecs = 1;
-            maxLen = 5;
+            maxDecs = 2;
+            maxLen = 6;
         }
         else if (&s == &jitterSlider)
         {
             minVal = 0.0;
             maxVal = 100.0;
-            maxDecs = 1;
-            maxLen = 5;
+            maxDecs = 2;
+            maxLen = 6;
         }
         else if (&s == &feedbackSlider)
         {
             minVal = -100.0;
             maxVal = 100.0;
-            maxDecs = 1;
+            maxDecs = 2;
             maxLen = 6;
         }
         else if (&s == &mixSlider)
         {
             minVal = 0.0;
             maxVal = 100.0;
-            maxDecs = 1;
-            maxLen = 5;
+            maxDecs = 2;
+            maxLen = 6;
         }
         else if (&s == &modSlider)
         {
@@ -2470,12 +2478,12 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     };
 
     // HP section
-    aw->addTextEditor ("hpFreq", juce::String (juce::roundToInt (hpFreq)), juce::String());
+    aw->addTextEditor ("hpFreq", formatFilterPromptFrequency (hpFreq), juce::String());
     auto* hpBar = new PromptBar (scheme, freqToNorm (hpFreq), freqToNorm (DisperserAudioProcessor::kFilterHpFreqDefault));
     aw->addAndMakeVisible (hpBar);
 
     // LP section
-    aw->addTextEditor ("lpFreq", juce::String (juce::roundToInt (lpFreq)), juce::String());
+    aw->addTextEditor ("lpFreq", formatFilterPromptFrequency (lpFreq), juce::String());
     auto* lpBar = new PromptBar (scheme, freqToNorm (lpFreq), freqToNorm (DisperserAudioProcessor::kFilterLpFreqDefault));
     aw->addAndMakeVisible (lpBar);
 
@@ -2530,8 +2538,8 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
 
         auto* hpTe = aw->getTextEditor ("hpFreq");
         auto* lpTe = aw->getTextEditor ("lpFreq");
-        float hpF = hpTe ? juce::jlimit (20.0f, 20000.0f, (float) hpTe->getText().getIntValue()) : 20.0f;
-        float lpF = lpTe ? juce::jlimit (20.0f, 20000.0f, (float) lpTe->getText().getIntValue()) : 20000.0f;
+        float hpF = hpTe ? juce::jlimit (20.0f, 20000.0f, (float) hpTe->getText().getFloatValue()) : 20.0f;
+        float lpF = lpTe ? juce::jlimit (20.0f, 20000.0f, (float) lpTe->getText().getFloatValue()) : 20000.0f;
         // Clamp so HP never exceeds LP
         if (hpF > lpF) { const float mid = (hpF + lpF) * 0.5f; hpF = mid; lpF = mid; }
         if (hpTe) setP (DisperserAudioProcessor::kParamFilterHpFreq, hpF);
@@ -2607,7 +2615,7 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
 
         if (auto* te = aw->getTextEditor (editorId))
         {
-            te->setText (juce::String (juce::roundToInt (normToFreq (v01))), juce::sendNotification);
+            te->setText (formatFilterPromptFrequency (normToFreq (v01)), juce::sendNotification);
             te->selectAll();
         }
         *syncing = false;
@@ -2621,14 +2629,14 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     {
         if (*syncing || te == nullptr || bar == nullptr) return;
         *syncing = true;
-        float freq = juce::jlimit (20.0f, 20000.0f, (float) te->getText().getIntValue());
+        float freq = juce::jlimit (20.0f, 20000.0f, (float) te->getText().getFloatValue());
         auto* otherTe = aw->getTextEditor (isHp ? "lpFreq" : "hpFreq");
-        const float otherFreq = otherTe ? juce::jlimit (20.0f, 20000.0f, (float) otherTe->getText().getIntValue()) : (isHp ? 20000.0f : 20.0f);
+        const float otherFreq = otherTe ? juce::jlimit (20.0f, 20000.0f, (float) otherTe->getText().getFloatValue()) : (isHp ? 20000.0f : 20.0f);
         if (isHp)
             freq = juce::jmin (freq, otherFreq);
         else
             freq = juce::jmax (freq, otherFreq);
-        te->setText (juce::String (juce::roundToInt (freq)), juce::dontSendNotification);
+        te->setText (formatFilterPromptFrequency (freq), juce::dontSendNotification);
         bar->value01 = freqToNorm (freq);
         bar->repaint();
         *syncing = false;
@@ -4282,13 +4290,13 @@ juce::String DisperserAudioProcessorEditor::getFreqTextShort() const
 juce::String DisperserAudioProcessorEditor::getShapeText() const
 {
     const double v = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
-    return juce::String (v * 100.0, 1) + "% SHAPE";
+    return juce::String ((int) std::lround (v * 100.0)) + "% SHAPE";
 }
 
 juce::String DisperserAudioProcessorEditor::getShapeTextShort() const
 {
     const double v = juce::jlimit (0.0, 1.0, shapeSlider.getValue());
-    return juce::String (v * 100.0, 1) + "% SHP";
+    return juce::String ((int) std::lround (v * 100.0)) + "% SHP";
 }
 
 juce::String DisperserAudioProcessorEditor::getJitterText() const
@@ -4327,7 +4335,7 @@ juce::String DisperserAudioProcessorEditor::getFeedbackText() const
 {
     const double v = juce::jlimit (-1.0, 1.0, feedbackSlider.getValue());
     const int pctInt = (int) std::lround (v * 100.0);
-    return juce::String (pctInt) + "% FEEDBACK";
+    return juce::String (pctInt) + "% FBK";
 }
 
 juce::String DisperserAudioProcessorEditor::getFeedbackTextShort() const
@@ -4362,11 +4370,11 @@ juce::String DisperserAudioProcessorEditor::getMixText() const
         const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
         const juce::String suffix = isDry ? " DRY" : " WET";
         if (dB <= -100.0f) return "-INF dB" + suffix;
-        if (std::abs (dB) < 0.05f) return "0 dB" + suffix;
+        if (std::abs (dB) < 0.05f) return "0.0 dB" + suffix;
         return juce::String (dB, 1) + " dB" + suffix;
     }
     const double v = juce::jlimit (0.0, 1.0, mixSlider.getValue());
-    return juce::String (v * 100.0, 1) + "% MIX";
+    return juce::String ((int) std::lround (v * 100.0)) + "% MIX";
 }
 
 juce::String DisperserAudioProcessorEditor::getMixTextShort() const
@@ -4378,11 +4386,11 @@ juce::String DisperserAudioProcessorEditor::getMixTextShort() const
         const float dB = (level <= 0.0001f) ? -100.0f : 20.0f * std::log10 (level);
         const juce::String suffix = isDry ? " DRY" : " WET";
         if (dB <= -100.0f) return "-INF" + suffix;
-        if (std::abs (dB) < 0.05f) return "0dB" + suffix;
+        if (std::abs (dB) < 0.05f) return "0.0dB" + suffix;
         return juce::String (dB, 1) + "dB" + suffix;
     }
     const double v = juce::jlimit (0.0, 1.0, mixSlider.getValue());
-    return juce::String (v * 100.0, 1) + "% MX";
+    return juce::String ((int) std::lround (v * 100.0)) + "% MX";
 }
 
 juce::String DisperserAudioProcessorEditor::getInputText() const
@@ -4413,7 +4421,7 @@ juce::String DisperserAudioProcessorEditor::getTiltText() const
 {
     const float db = (float) tiltSlider.getValue();
     if (std::abs (db) < 0.05f)
-        return "0 dB TILT";
+        return "0.0 dB TILT";
     return juce::String (db, 1) + " dB TILT";
 }
 
@@ -4421,7 +4429,7 @@ juce::String DisperserAudioProcessorEditor::getTiltTextShort() const
 {
     const float db = (float) tiltSlider.getValue();
     if (std::abs (db) < 0.05f)
-        return "0 dB TLT";
+        return "0.0 dB TLT";
     return juce::String (db, 1) + " dB TLT";
 }
 
@@ -4467,9 +4475,9 @@ namespace
     constexpr const char* kFreqLegendAlt     = "20.00 KHZ";
     constexpr const char* kFreqLegendInt     = "20000";
 
-    constexpr const char* kShapeLegendFull   = "100.0% SHAPE";
-    constexpr const char* kShapeLegendShort  = "100.0% SHP";
-    constexpr const char* kShapeLegendInt    = "100.0%";
+    constexpr const char* kShapeLegendFull   = "100% SHAPE";
+    constexpr const char* kShapeLegendShort  = "100% SHP";
+    constexpr const char* kShapeLegendInt    = "100%";
 
     constexpr const char* kJitterLegendFull  = "100% JIT";
     constexpr const char* kJitterLegendShort = "100% JIT";
@@ -4479,7 +4487,7 @@ namespace
     constexpr const char* kStyleLegendShort  = "STEREO";
     constexpr const char* kStyleLegendInt    = "STEREO";
 
-    constexpr const char* kFeedbackLegendFull  = "100% FEEDBACK";
+    constexpr const char* kFeedbackLegendFull  = "100% FBK";
     constexpr const char* kFeedbackLegendShort = "100% FBK";
     constexpr const char* kFeedbackLegendInt   = "100%";
 
@@ -4497,13 +4505,13 @@ namespace
 
     constexpr const char* kTiltLegendFull  = "-6.0 dB TILT";
     constexpr const char* kTiltLegendShort = "-6.0 dB TLT";
-    constexpr const char* kTiltLegendInt   = "-6dB";
+    constexpr const char* kTiltLegendInt   = "-6.0dB";
 
-    constexpr const char* kMixLegendFull  = "100.0% MIX";
-    constexpr const char* kMixLegendShort = "100.0% MX";
-    constexpr const char* kMixLegendInt   = "100.0%";
+    constexpr const char* kMixLegendFull  = "100% MIX";
+    constexpr const char* kMixLegendShort = "100% MX";
+    constexpr const char* kMixLegendInt   = "100%";
 
-    constexpr const char* kLimLegendFull  = "-36.0 dB LIMIT";
+    constexpr const char* kLimLegendFull  = "-36.0 dB LIM";
     constexpr const char* kLimLegendShort = "-36.0 dB LIM";
     constexpr const char* kLimLegendInt   = "-36.0dB";
 
@@ -4909,7 +4917,7 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     {
         if (auto* slider = getSliderForValueAreaPoint (p))
         {
-            if (slider != &seriesSlider)
+            if (slider != &seriesSlider && slider != &styleSlider)
                 openNumericEntryPopupForSlider (*slider);
             return;
         }
@@ -5385,7 +5393,7 @@ void DisperserAudioProcessorEditor::resized()
 
     if (ioSectionExpanded_)
     {
-        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, LIM THRESHOLD, MODE combos, CHSF | CHSD; main params hidden
+        // Expanded: [toggle bar] → INPUT, OUTPUT, TILT, FILTER, PAN, MIX, LIM, MODE combos, CHSF | CHSD; main params hidden
         inputSlider.setBounds  (horizontalLayout.leftX, mainTop + 0 * step, horizontalLayout.barW, verticalLayout.barH);
         outputSlider.setBounds (horizontalLayout.leftX, mainTop + 1 * step, horizontalLayout.barW, verticalLayout.barH);
         tiltSlider.setBounds   (horizontalLayout.leftX, mainTop + 2 * step, horizontalLayout.barW, verticalLayout.barH);

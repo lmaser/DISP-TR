@@ -20,15 +20,15 @@ The core idea is:
 - `STAGES` and `SERIES` increase complexity and depth
 - `SHAPE` spreads the stage distribution around the center
 - `JIT` adds controlled jitter movement to frequency, shape, and subtle feedback behavior
-- `FEEDBACK` adds resonance and character
+- `FBK` adds resonance and character
 
 ## Interface
 
 DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, and numeric popup entry.
 
 - **Bar sliders**: Click and drag horizontally. Right-click the value area for numeric entry when available.
-- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FEEDBACK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MD` toggles.
-- **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM THRESHOLD`, filter controls, routing/mode combos, invert options, and chaos toggles.
+- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FBK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MD` toggles.
+- **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM`, filter controls, routing/mode combos, invert options, and chaos toggles.
 - **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
 - **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
 - **MIDI channel prompt**: Right-click the MIDI channel legend when `MD` is enabled to choose omni or a fixed channel.
@@ -81,7 +81,7 @@ Adds deterministic internal jitter to the disperser by modulating the effective 
 
 The frequency and shape movement uses independent deterministic lanes per active `SERIES`, while feedback jitter stays global because feedback is injected before the full all-pass chain. The modulation is smoothed, bounded, and seeded deterministically so repeated sessions keep a stable character. Feedback jitter is multiplicative and sign-preserving, so `0%` feedback does not generate sound and negative feedback never flips polarity unexpectedly.
 
-### FEEDBACK (-100 to +100%)
+### FBK (-100 to +100%)
 
 Feeds the all-pass output back into the input.
 
@@ -209,7 +209,7 @@ Both use amount and speed controls in their popup editor:
 
 Internally this uses Hermite-interpolated sample-and-hold motion plus drift, so the modulation stays organic instead of stepping harshly.
 
-### LIM THRESHOLD (-36 to 0 dB)
+### LIM (-36 to 0 dB)
 
 Threshold for the transparent peak limiter.
 At `0 dB`, it mainly acts as a safety net.
@@ -237,7 +237,7 @@ At a high level, DISP-TR processes signal like this:
 3. Optional HP/LP filter if `FILTER POS` puts the filter block in `PRE`
 4. Optional tilt EQ if `FILTER POS` puts tilt in `PRE`
 5. Optional `CHSD` mono-linked pre-core micro-delay movement and subtle gain movement
-6. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `ALT`, `FEEDBACK`, `STYLE`, MIDI note tracking)
+6. Disperser core runs (`FREQUENCY`, `MOD`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `ALT`, `FBK`, `STYLE`, MIDI note tracking)
 7. Optional HP/LP filter if the filter block is in `POST`
 8. Optional tilt EQ if tilt is in `POST`
 9. `MODE OUT` matrix is applied
@@ -272,11 +272,11 @@ Current smoothing behavior includes:
 - `STAGES`: smoothed
 - `SHAPE`: smoothed
 - `JIT`: smoothed before its internal movement layers
-- `FEEDBACK`: smoothed
+- `FBK`: smoothed
 - `INPUT`, `OUTPUT`, `MIX`: smoothed
 - `DRY LEVEL` / `WET LEVEL` in `SEND`: smoothed
 - `PAN`: smoothed
-- `LIM THRESHOLD`: smoothed before limiter application
+- `LIM`: smoothed before limiter application
 
 This keeps rapid GUI movement and automation from producing unnecessary zippering.
 

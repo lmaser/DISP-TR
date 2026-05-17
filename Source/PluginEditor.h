@@ -64,7 +64,7 @@ private:
             if (owner != nullptr && (this == &owner->shapeSlider || this == &owner->jitterSlider || this == &owner->feedbackSlider || this == &owner->mixSlider))
             {
                 double percent = v * 100.0;
-                return juce::String (percent, 1);
+                return juce::String (percent, 2);
             }
 
             if (owner != nullptr && this == &owner->modSlider)
