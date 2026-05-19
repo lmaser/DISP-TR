@@ -538,13 +538,11 @@ private:
     static constexpr double kDefaultOutput   = (double) DisperserAudioProcessor::kOutputDefault;
 
     static constexpr int kMinW = 360;
-    static constexpr int kMinH = 740;
-    static constexpr int kMaxW = 800;
-    static constexpr int kMaxH = 820;
+    static constexpr int kMinH = 752;
+    static constexpr int kMaxW = kMinW * 2;
+    static constexpr int kMaxH = kMinH;
 
     static constexpr int kLayoutVerticalBiasPx = 10;
-
-    static constexpr double kHzSwitchHz = 999.5;
 
     bool promptOverlayActive = false;
     bool suppressSizePersistence = false;

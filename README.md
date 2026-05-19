@@ -27,14 +27,14 @@ The core idea is:
 DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, and numeric popup entry.
 
 - **Bar sliders**: Click and drag horizontally. Right-click the value area for numeric entry when available.
-- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FBK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MD` toggles.
+- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FBK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MIDI` toggles.
 - **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM`, filter controls, routing/mode combos, invert options, and chaos toggles.
 - **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
 - **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
-- **MIDI channel prompt**: Right-click the MIDI channel legend when `MD` is enabled to choose omni or a fixed channel.
+- **MIDI channel prompt**: Right-click the MIDI channel legend when `MIDI` is enabled to choose omni or a fixed channel.
 - **Gear icon**: Opens the info popup with version, credits, and access to graphics settings.
 - **Graphics popup**: Controls CRT tail/post-processing and colour palette options.
-- **Resize**: Drag the bottom-right corner. Size persists across sessions.
+- **Resize**: Drag the bottom-right corner. Editor width persists across sessions.
 
 The UI is not paged, but it is stateful: the editor remembers size, palette, CRT setting, MIDI channel, and whether the IO section is expanded.
 
@@ -56,7 +56,7 @@ Series changes use a short crossfade to avoid clicks.
 
 Main center frequency for the dispersion network.
 Low values concentrate the effect toward the low end; high values move it upward.
-When `MD` is active, MIDI note tracking overrides the slider target.
+When `MIDI` is active, MIDI note tracking overrides the slider target.
 
 ### MOD (0.25x-4.0x)
 
@@ -188,7 +188,7 @@ Each can be applied to:
 `INV POL` flips polarity.
 `INV STR` swaps the stereo channels.
 
-### MD (MIDI)
+### MIDI
 
 Enables MIDI note tracking for `FREQUENCY`.
 When active, note-on pitch becomes the frequency target.
