@@ -34,9 +34,9 @@ DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, a
 - **MIDI channel prompt**: Right-click the MIDI channel legend when `MIDI` is enabled to choose omni or a fixed channel.
 - **Gear icon**: Opens the info popup with version, credits, and access to graphics settings.
 - **Graphics popup**: Controls CRT tail/post-processing and colour palette options.
-- **Resize**: Drag the bottom-right corner. Editor width persists across sessions.
+- **Resize**: Drag the bottom-right corner. New instances open at `360 x 752`, editor width persists, and height stays fixed.
 
-The UI is not paged, but it is stateful: the editor remembers size, palette, CRT setting, MIDI channel, and whether the IO section is expanded.
+The UI is not paged, but it is stateful: the editor remembers width, palette, CRT setting, MIDI channel, and whether the IO section is expanded.
 
 ## Parameters
 

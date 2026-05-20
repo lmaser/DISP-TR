@@ -456,7 +456,7 @@ private:
 	std::array<std::atomic<float>*, 4> uiColorParams { nullptr, nullptr, nullptr, nullptr };
 
 	std::atomic<int> uiEditorWidth { 360 };
-	std::atomic<int> uiEditorHeight { 360 };
+	std::atomic<int> uiEditorHeight { 752 };
 	std::atomic<int> uiUseCustomPalette { 0 };
 	std::atomic<int> uiFxTailEnabled { 0 };
 	std::array<std::atomic<juce::uint32>, 4> uiCustomPalette {
