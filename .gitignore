@@ -31,6 +31,13 @@ JuceLibraryCode/*.sdf
 # Other
 *.log
 /dumps/
+*.csv
+*.tmp
+*.bak
+*.orig
+*.rej
 *.vspscc
 _ReSharper*/
 /.vscode/
+_codex_backups/
+filter_prompt_mockup.html

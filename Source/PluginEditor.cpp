@@ -38,9 +38,11 @@ static juce::String formatInlineFrequency (double hz)
     const double safeHz = juce::jmax (0.0, hz);
     if (safeHz < 0.05)
         return "0Hz";
-    if (safeHz >= 1000.0)
-        return juce::String (safeHz / 1000.0, 2) + "kHz";
-    return juce::String (safeHz, 2) + "Hz";
+
+    const double displayHz = std::round (safeHz * 100.0) / 100.0;
+    if (displayHz >= 1000.0)
+        return juce::String (displayHz / 1000.0, 2) + "kHz";
+    return juce::String (displayHz, 2) + "Hz";
 }
 
 static bool isGainFaderFloor (float dB) noexcept
@@ -1543,8 +1545,6 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
             cachedLimThresholdIntOnly   = limText + "dB";
         }
     }
-
-    freqSlider.setTooltip ("FREQ " + cachedFreqIntOnly);
 
     const bool lengthChanged = oldAmountFullLen  != cachedAmountTextFull.length()
                             || oldAmountShortLen != cachedAmountTextShort.length()
