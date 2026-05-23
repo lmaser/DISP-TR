@@ -1864,10 +1864,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 
 	// Limiter
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
-		kParamLimThreshold, "Limiter Threshold",
+		kParamLimThreshold, "Lim Threshold",
 		juce::NormalisableRange<float> (kLimThresholdMin, kLimThresholdMax, 0.1f), kLimThresholdDefault));
 	params.push_back (std::make_unique<juce::AudioParameterChoice> (
-		kParamLimMode, "Limiter Mode", juce::StringArray { "NONE", "WET", "GLOBAL" }, kLimModeDefault));
+		kParamLimMode, "Lim Mode", juce::StringArray { "NONE", "WET", "GLOBAL" }, kLimModeDefault));
 
 	// Mix Mode (INSERT / SEND) + Dry/Wet levels for SEND mode
 	params.push_back (std::make_unique<juce::AudioParameterChoice> (
