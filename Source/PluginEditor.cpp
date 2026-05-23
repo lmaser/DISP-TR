@@ -68,15 +68,6 @@ static juce::String formatGainFaderDbCompact (float dB)
     return juce::String (dB, 1) + "dB";
 }
 
-static juce::String formatFilterPromptFrequency (float hz)
-{
-    if (hz >= 1000.0f)
-        return juce::String (hz, 2);
-    if (hz >= 100.0f)
-        return juce::String (hz, 1);
-    return juce::String (hz, 2);
-}
-
 static constexpr double kModCenter  = 0.5;
 static constexpr double kModScale   = 3.0;
 static constexpr double kModMaxMult = 4.0;
@@ -2474,12 +2465,12 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     };
 
     // HP section
-    aw->addTextEditor ("hpFreq", formatFilterPromptFrequency (hpFreq), juce::String());
+    aw->addTextEditor ("hpFreq", juce::String (juce::roundToInt (hpFreq)), juce::String());
     auto* hpBar = new PromptBar (scheme, freqToNorm (hpFreq), freqToNorm (DisperserAudioProcessor::kFilterHpFreqDefault));
     aw->addAndMakeVisible (hpBar);
 
     // LP section
-    aw->addTextEditor ("lpFreq", formatFilterPromptFrequency (lpFreq), juce::String());
+    aw->addTextEditor ("lpFreq", juce::String (juce::roundToInt (lpFreq)), juce::String());
     auto* lpBar = new PromptBar (scheme, freqToNorm (lpFreq), freqToNorm (DisperserAudioProcessor::kFilterLpFreqDefault));
     aw->addAndMakeVisible (lpBar);
 
@@ -2611,7 +2602,7 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
 
         if (auto* te = aw->getTextEditor (editorId))
         {
-            te->setText (formatFilterPromptFrequency (normToFreq (v01)), juce::sendNotification);
+            te->setText (juce::String (juce::roundToInt (normToFreq (v01))), juce::sendNotification);
             te->selectAll();
         }
         *syncing = false;
@@ -2632,7 +2623,7 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
             freq = juce::jmin (freq, otherFreq);
         else
             freq = juce::jmax (freq, otherFreq);
-        te->setText (formatFilterPromptFrequency (freq), juce::dontSendNotification);
+        te->setText (juce::String (juce::roundToInt (freq)), juce::dontSendNotification);
         bar->value01 = freqToNorm (freq);
         bar->repaint();
         *syncing = false;
@@ -2691,6 +2682,10 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     // ── Prepare TextEditors via shared helper (sets font, height, indents, colours) ──
     preparePromptTextEditor (*aw, "hpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
     preparePromptTextEditor (*aw, "lpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
+    if (auto* te = aw->getTextEditor ("hpFreq"))
+        te->setInputRestrictions (5, "0123456789");
+    if (auto* te = aw->getTextEditor ("lpFreq"))
+        te->setInputRestrictions (5, "0123456789");
 
     // Clicking the HP / LP name label toggles its checkbox
     struct ToggleForwarder : public juce::MouseListener
@@ -2804,6 +2799,10 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     // Re-apply preparePromptTextEditor (may adjust after layout) then re-layout
     preparePromptTextEditor (*aw, "hpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
     preparePromptTextEditor (*aw, "lpFreq", scheme.bg, scheme.text, scheme.fg, promptFont, false);
+    if (auto* te = aw->getTextEditor ("hpFreq"))
+        te->setInputRestrictions (5, "0123456789");
+    if (auto* te = aw->getTextEditor ("lpFreq"))
+        te->setInputRestrictions (5, "0123456789");
     layoutRows();
 
     styleAlertButtons (*aw, lnf);

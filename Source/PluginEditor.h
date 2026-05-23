@@ -82,8 +82,14 @@ private:
 
             if (owner != nullptr && this == &owner->freqSlider)
             {
-                const double rounded3 = std::round (v * 1000.0) / 1000.0;
-                return juce::String (rounded3, 3);
+                const double safeHz = juce::jmax (0.0, v);
+                if (safeHz < 0.05)
+                    return "0Hz";
+
+                const double displayHz = std::round (safeHz * 100.0) / 100.0;
+                if (displayHz >= 1000.0)
+                    return juce::String (displayHz / 1000.0, 2) + "kHz";
+                return juce::String (displayHz, 2) + "Hz";
             }
 
             if (owner != nullptr && (this == &owner->inputSlider || this == &owner->outputSlider
