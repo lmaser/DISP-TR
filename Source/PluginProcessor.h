@@ -1012,87 +1012,78 @@ private:
 	static constexpr float kLimThresholdDefault = 0.0f;
 	static constexpr int   kLimModeDefault      = 0;   // 0=NONE  1=WET  2=GLOBAL
 
-	// Zero-latency soft-knee limiter state (stereo-linked)
+	// Dual-stage transparent limiter state (stereo-linked)
 	static constexpr float kLimFloor = 1.0e-12f;
-	static constexpr float kLimKneeDb = 12.0f;
-	static constexpr float kLimResidualKneeRatio = 0.15f;
-	float limGainDb_ = 0.0f;
+	float limEnv1_[2] = { kLimFloor, kLimFloor };
+	float limEnv2_[2] = { kLimFloor, kLimFloor };
 	float limAtt1_ = 0.0f;
 	float limRel1_ = 0.0f;
 	float limRel2_ = 0.0f;
 
-	static inline float limGainToDb (float gain) noexcept
-	{
-		return 20.0f * std::log10 (juce::jmax (gain, kLimFloor));
-	}
-
-	static inline float limDbToGain (float db) noexcept
-	{
-		return std::pow (10.0f, db / 20.0f);
-	}
-
-	static inline float limSmoothStep01 (float x) noexcept
-	{
-		x = juce::jlimit (0.0f, 1.0f, x);
-		return x * x * (3.0f - 2.0f * x);
-	}
-
-	static inline float computeSoftKneeLimiterGainDb (float peak, float threshLin) noexcept
-	{
-		const float peakDb = limGainToDb (peak);
-		const float thresholdDb = limGainToDb (threshLin);
-		const float overDb = peakDb - thresholdDb;
-
-		if (overDb <= 0.0f)
-			return 0.0f;
-
-		return -overDb * limSmoothStep01 (overDb / kLimKneeDb);
-	}
-
-	static inline float softLimitResidual (float sample, float threshLin) noexcept
-	{
-		const float ceiling = juce::jmax (threshLin, kLimFloor);
-		const float a = std::abs (sample);
-		if (a <= ceiling)
-			return sample;
-
-		const float knee = juce::jmax (ceiling * kLimResidualKneeRatio, kLimFloor);
-		const float limited = ceiling + knee * std::tanh ((a - ceiling) / knee);
-		return std::copysign (limited, sample);
-	}
-
-	inline float advanceLimiterGain (float linkedPeak, float threshLin) noexcept
-	{
-		const float targetGainDb = computeSoftKneeLimiterGainDb (linkedPeak, threshLin);
-		if (targetGainDb < limGainDb_)
-		{
-			limGainDb_ = limAtt1_ * limGainDb_ + (1.0f - limAtt1_) * targetGainDb;
-		}
-		else
-		{
-			const float releaseDepth = juce::jlimit (0.0f, 1.0f, -limGainDb_ / 24.0f);
-			const float releaseCoeff = limRel1_ + (limRel2_ - limRel1_) * releaseDepth;
-			limGainDb_ = releaseCoeff * limGainDb_ + (1.0f - releaseCoeff) * targetGainDb;
-		}
-
-		if (limGainDb_ > -0.0001f && targetGainDb >= -0.0001f)
-			limGainDb_ = 0.0f;
-
-		return limDbToGain (limGainDb_);
-	}
-
 	inline void applyLimiter (float& sampleL, float& sampleR, float threshLin) noexcept
 	{
-		const float linkedPeak = juce::jmax (std::abs (sampleL), std::abs (sampleR));
-		const float gain = advanceLimiterGain (linkedPeak, threshLin);
-		sampleL = softLimitResidual (sampleL * gain, threshLin);
-		sampleR = softLimitResidual (sampleR * gain, threshLin);
+		const float peakL = std::abs (sampleL);
+		const float peakR = std::abs (sampleR);
+
+		// Stage 1 - leveler (2 ms attack, 10 ms release)
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv1_[ch])
+				limEnv1_[ch] = limAtt1_ * limEnv1_[ch] + (1.0f - limAtt1_) * p;
+			else
+				limEnv1_[ch] = limRel1_ * limEnv1_[ch] + (1.0f - limRel1_) * p;
+			if (limEnv1_[ch] < kLimFloor) limEnv1_[ch] = kLimFloor;
+		}
+
+		// Stage 2 - brickwall (instant attack, 100 ms release)
+		for (int ch = 0; ch < 2; ++ch)
+		{
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv2_[ch])
+				limEnv2_[ch] = p;
+			else
+				limEnv2_[ch] = limRel2_ * limEnv2_[ch] + (1.0f - limRel2_) * p;
+			if (limEnv2_[ch] < kLimFloor) limEnv2_[ch] = kLimFloor;
+		}
+
+		// Stereo-linked gain reduction
+		float gr = 1.0f;
+		const float maxEnv1 = juce::jmax (limEnv1_[0], limEnv1_[1]);
+		const float maxEnv2 = juce::jmax (limEnv2_[0], limEnv2_[1]);
+		if (maxEnv1 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv1);
+		if (maxEnv2 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv2);
+
+		sampleL *= gr;
+		sampleR *= gr;
 	}
 
 	inline void applyLimiterMono (float& sample, float threshLin) noexcept
 	{
-		const float gain = advanceLimiterGain (std::abs (sample), threshLin);
-		sample = softLimitResidual (sample * gain, threshLin);
+		const float peak = std::abs (sample);
+		if (peak > limEnv1_[0])
+			limEnv1_[0] = limAtt1_ * limEnv1_[0] + (1.0f - limAtt1_) * peak;
+		else
+			limEnv1_[0] = limRel1_ * limEnv1_[0] + (1.0f - limRel1_) * peak;
+		if (limEnv1_[0] < kLimFloor) limEnv1_[0] = kLimFloor;
+
+		if (peak > limEnv2_[0])
+			limEnv2_[0] = peak;
+		else
+			limEnv2_[0] = limRel2_ * limEnv2_[0] + (1.0f - limRel2_) * peak;
+		if (limEnv2_[0] < kLimFloor) limEnv2_[0] = kLimFloor;
+
+		float gr = 1.0f;
+		if (limEnv1_[0] > threshLin)
+			gr = juce::jmin (gr, threshLin / limEnv1_[0]);
+		if (limEnv2_[0] > threshLin)
+			gr = juce::jmin (gr, threshLin / limEnv2_[0]);
+
+		sample *= gr;
+		limEnv1_[1] = limEnv1_[0];
+		limEnv2_[1] = limEnv2_[0];
 	}
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisperserAudioProcessor)

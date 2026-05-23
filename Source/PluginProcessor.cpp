@@ -344,13 +344,14 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	cachedChaosParamSmoothCoeff_ = std::exp (-1.0f / ((float) currentSampleRate * 0.010f));
 	chaosDelaySmoothStep_ = 1.0f - std::exp (-1.0f / ((float) currentSampleRate * 0.002f));
 
-	// Reset zero-latency soft-knee limiter state and precompute coefficients.
-	limGainDb_ = 0.0f;
+	// Reset limiter state and precompute coefficients
+	limEnv1_[0] = limEnv1_[1] = kLimFloor;
+	limEnv2_[0] = limEnv2_[1] = kLimFloor;
 	{
 		const float sr = (float) getSampleRate();
-		limAtt1_ = std::exp (-1.0f / (sr * 0.00035f));
-		limRel1_ = std::exp (-1.0f / (sr * 0.080f));
-		limRel2_ = std::exp (-1.0f / (sr * 0.350f));
+		limAtt1_ = std::exp (-1.0f / (sr * 0.002f));
+		limRel1_ = std::exp (-1.0f / (sr * 0.010f));
+		limRel2_ = std::exp (-1.0f / (sr * 0.100f));
 	}
 
 #if JUCE_DEBUG
