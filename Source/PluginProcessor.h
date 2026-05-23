@@ -318,6 +318,8 @@ private:
 	static constexpr float kJitterFeedbackOutputLimit = 1.0f;
 	static constexpr float kJitterFrequencyDepthScale = 2.0f;
 	static constexpr float kJitterShapeDepthScale = 0.45f;
+	static constexpr float kJitterCoeffSmoothMinSeconds = 0.018f;
+	static constexpr float kJitterCoeffSmoothMaxSeconds = 0.080f;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
 	int activeStages = 0;
@@ -328,11 +330,14 @@ private:
 	float lastCoeffFreqR  = -1.0f;
 	std::array<float, kSeriesMax> jitterSeriesFreq {};
 	std::array<float, kSeriesMax> jitterSeriesShape {};
+	std::array<float, kSeriesMax> smoothedJitterSeriesFreq {};
+	std::array<float, kSeriesMax> smoothedJitterSeriesShape {};
 	std::array<float, kSeriesMax> lastJitterCoeffFreq {};
 	std::array<float, kSeriesMax> lastJitterCoeffShape {};
 	std::array<float, kSeriesMax> lastJitterCoeffFreqR {};
 	int lastJitterCoeffStages = -1;
 	int coeffUpdateCountdown = 0;
+	bool jitterCoeffSmoothingReady_ = false;
 
 	// Feedback
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> feedbackSmoothed;

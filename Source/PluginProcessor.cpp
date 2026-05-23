@@ -279,10 +279,13 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	lastCoeffShape = -1.0f;
 	lastCoeffStages = -1;
 	lastCoeffFreqR = -1.0f;
+	smoothedJitterSeriesFreq.fill (freq);
+	smoothedJitterSeriesShape.fill (shape);
 	lastJitterCoeffFreq.fill (-1.0f);
 	lastJitterCoeffShape.fill (-1.0f);
 	lastJitterCoeffFreqR.fill (-1.0f);
 	lastJitterCoeffStages = -1;
+	jitterCoeffSmoothingReady_ = false;
 	for (int i = 0; i < kSeriesMax; ++i)
 		jitterLanes_[(size_t) i].reset (0x44564A4C + (juce::int64) i * 0x10001);
 	jitterFeedbackMod_.reset (0x44564A46ll, 0.381f);
@@ -1003,7 +1006,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 	                       || jitterSmoothed.isSmoothing()
 	                       || jitterSmoothed.getCurrentValue() > 0.0001f;
 	if (! jitterActive)
+	{
 		lastJitterCoeffStages = -1;
+		jitterCoeffSmoothingReady_ = false;
+	}
 
 	// Fast path: parameters converged + no crossfade -> tight inner loop
 	// without per-sample smoothing, coefficient checks, or fractional stages.
@@ -1107,6 +1113,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		float effectiveShape = shapeSmoothed.getNextValue();
 		float feedbackJitterOut = 0.0f;
 		float feedbackJitterDepth = 0.0f;
+		const float baseFb = feedbackSmoothed.getNextValue();
 		const int jitterCoeffSeriesCount = jitterActive
 			? juce::jlimit (0, kSeriesMax, juce::jmax (activeSeries, crossfading ? previousSeries : activeSeries))
 			: 0;
@@ -1115,20 +1122,39 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			const float jitterAmt = jitterSmoothed.getNextValue();
 			const float equivalentDelaySamples = calcJitterEquivalentDelaySamples (
 				effectiveFreq, smoothedStages, juce::jmax (1, jitterCoeffSeriesCount));
+			const float fbEnergy = smoothStep01 (std::abs (baseFb));
+			const float jitterCoeffTau = kJitterCoeffSmoothMaxSeconds
+				+ (kJitterCoeffSmoothMinSeconds - kJitterCoeffSmoothMaxSeconds) * fbEnergy;
+			const float jitterCoeffAlpha = 1.0f - std::exp (-1.0f / (juce::jmax (1.0f, (float) currentSampleRate) * jitterCoeffTau));
 
 			for (int s = 0; s < jitterCoeffSeriesCount; ++s)
 			{
+				const size_t idx = (size_t) s;
 				float freqOctOffset = 0.0f;
 				float shapeOffset = 0.0f;
-				advanceJitterLane (jitterLanes_[(size_t) s], jitterAmt, equivalentDelaySamples,
+				advanceJitterLane (jitterLanes_[idx], jitterAmt, equivalentDelaySamples,
 				                   s, freqOctOffset, shapeOffset);
-				jitterSeriesFreq[(size_t) s] = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
-				jitterSeriesShape[(size_t) s] = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
+				const float targetJitterFreq = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
+				const float targetJitterShape = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
+
+				if (! jitterCoeffSmoothingReady_)
+				{
+					smoothedJitterSeriesFreq[idx] = targetJitterFreq;
+					smoothedJitterSeriesShape[idx] = targetJitterShape;
+				}
+				else
+				{
+					smoothedJitterSeriesFreq[idx] += (targetJitterFreq - smoothedJitterSeriesFreq[idx]) * jitterCoeffAlpha;
+					smoothedJitterSeriesShape[idx] += (targetJitterShape - smoothedJitterSeriesShape[idx]) * jitterCoeffAlpha;
+				}
+
+				jitterSeriesFreq[idx] = juce::jlimit (20.0f, 20000.0f, smoothedJitterSeriesFreq[idx]);
+				jitterSeriesShape[idx] = juce::jlimit (0.0f, 1.0f, smoothedJitterSeriesShape[idx]);
 			}
+			jitterCoeffSmoothingReady_ = true;
 
 			advanceJitterFeedback (jitterAmt, equivalentDelaySamples, feedbackJitterOut, feedbackJitterDepth);
 		}
-		const float baseFb = feedbackSmoothed.getNextValue();
 		const float fb = jitterActive ? applyJitterToFeedback (baseFb, feedbackJitterOut, feedbackJitterDepth) : baseFb;
 		float sourceL = ch0[n];
 		float sourceR = hasStereo ? ch1[n] : sourceL;
