@@ -443,7 +443,8 @@ bool DisperserAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 
 float DisperserAudioProcessor::calcAllPassCoeff (float frequency, float sampleRate) noexcept
 {
-	const float f = juce::jlimit (20.0f, 0.49f * sampleRate, frequency);
+	const float maxFreq = juce::jmax (kFreqMin, juce::jmin (kFreqEffectiveMax, 0.49f * sampleRate));
+	const float f = juce::jlimit (kFreqMin, maxFreq, frequency);
 	const float t = std::tan (juce::MathConstants<float>::pi * f / sampleRate);
 	if (! std::isfinite (t))
 		return 0.0f;
@@ -505,8 +506,8 @@ void DisperserAudioProcessor::updateCoefficientsInto (float freqHz, float shapeN
 		dest.assign ((size_t) kAmountMax, 0.0f);
 
 	const float sr = (float) currentSampleRate;
-	const float minFreq = 20.0f;
-	const float maxFreq = 0.49f * sr;
+	const float minFreq = kFreqMin;
+	const float maxFreq = juce::jmax (minFreq, juce::jmin (kFreqEffectiveMax, 0.49f * sr));
 	const float center = juce::jlimit (minFreq, maxFreq, freqHz);
 	const float shape = juce::jlimit (0.0f, 1.0f, shapeNorm);
 
@@ -622,6 +623,10 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 		? 1.0f / (4.0f - 6.0f * modValue)
 		: (1.0f + (modValue - 0.5f) * 6.0f);
 	targetFreq *= freqMultiplier;
+	{
+		const float effectiveFreqMax = juce::jmax (kFreqMin, juce::jmin (kFreqEffectiveMax, 0.49f * (float) currentSampleRate));
+		targetFreq = juce::jlimit (kFreqMin, effectiveFreqMax, targetFreq);
+	}
 
 	// Smoothstep feedback mapping (sign-preserving bipolar)
 	float rawFeedback = juce::jlimit (kFeedbackMin, kFeedbackMax, loadAtomicOrDefault (feedbackParam, kFeedbackDefault));
@@ -1122,10 +1127,14 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 			const float jitterAmt = jitterSmoothed.getNextValue();
 			const float equivalentDelaySamples = calcJitterEquivalentDelaySamples (
 				effectiveFreq, smoothedStages, juce::jmax (1, jitterCoeffSeriesCount));
-			const float fbEnergy = smoothStep01 (std::abs (baseFb));
+			const float absFeedbackForJitter = juce::jlimit (0.0f, 1.0f, std::abs (baseFb));
+			const float fbEnergy = 0.9f * absFeedbackForJitter + 0.1f * smoothStep01 (absFeedbackForJitter);
 			const float jitterCoeffTau = kJitterCoeffSmoothMaxSeconds
 				+ (kJitterCoeffSmoothMinSeconds - kJitterCoeffSmoothMaxSeconds) * fbEnergy;
-			const float jitterCoeffAlpha = 1.0f - std::exp (-1.0f / (juce::jmax (1.0f, (float) currentSampleRate) * jitterCoeffTau));
+			const float jitterCoeffAlpha = (jitterCoeffTau <= 0.000001f)
+				? 1.0f
+				: (1.0f - std::exp (-1.0f / (juce::jmax (1.0f, (float) currentSampleRate) * jitterCoeffTau)));
+			const float jitterFreqMax = juce::jmax (kFreqMin, juce::jmin (kFreqEffectiveMax, 0.49f * (float) currentSampleRate));
 
 			for (int s = 0; s < jitterCoeffSeriesCount; ++s)
 			{
@@ -1134,7 +1143,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				float shapeOffset = 0.0f;
 				advanceJitterLane (jitterLanes_[idx], jitterAmt, equivalentDelaySamples,
 				                   s, freqOctOffset, shapeOffset);
-				const float targetJitterFreq = juce::jlimit (20.0f, 20000.0f, effectiveFreq * std::exp2 (freqOctOffset));
+				const float targetJitterFreq = juce::jlimit (kFreqMin, jitterFreqMax, effectiveFreq * std::exp2 (freqOctOffset));
 				const float targetJitterShape = juce::jlimit (0.0f, 1.0f, effectiveShape + shapeOffset);
 
 				if (! jitterCoeffSmoothingReady_)
@@ -1148,7 +1157,7 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 					smoothedJitterSeriesShape[idx] += (targetJitterShape - smoothedJitterSeriesShape[idx]) * jitterCoeffAlpha;
 				}
 
-				jitterSeriesFreq[idx] = juce::jlimit (20.0f, 20000.0f, smoothedJitterSeriesFreq[idx]);
+				jitterSeriesFreq[idx] = juce::jlimit (kFreqMin, jitterFreqMax, smoothedJitterSeriesFreq[idx]);
 				jitterSeriesShape[idx] = juce::jlimit (0.0f, 1.0f, smoothedJitterSeriesShape[idx]);
 			}
 			jitterCoeffSmoothingReady_ = true;
@@ -1748,7 +1757,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DisperserAudioProcessor::cre
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamFreq, "Frequency",
-		juce::NormalisableRange<float> (20.0f, 20000.0f, 0.0f, 0.35f), kFreqDefault));
+		juce::NormalisableRange<float> (kFreqMin, kFreqBaseMax, 0.0f, 0.35f), kFreqDefault));
 
 	params.push_back (std::make_unique<juce::AudioParameterFloat> (
 		kParamShape, "Shape",

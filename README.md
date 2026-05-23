@@ -52,9 +52,9 @@ Number of cascaded stage chains.
 Each extra series block deepens the effect.
 Series changes use a short crossfade to avoid clicks.
 
-### FREQUENCY (20-20000 Hz)
+### FREQUENCY (20-5000 Hz, up to 20 kHz with MOD)
 
-Main center frequency for the dispersion network.
+Main base center frequency for the dispersion network.
 Low values concentrate the effect toward the low end; high values move it upward.
 When `MIDI` is active, MIDI note tracking overrides the slider target.
 
@@ -62,6 +62,7 @@ When `MIDI` is active, MIDI note tracking overrides the slider target.
 
 Frequency multiplier for the disperser center.
 The control is non-linear around `1.0x`, so it gives useful low-ratio and high-ratio ranges without feeling cramped.
+At `4.0x`, the base `FREQUENCY` range reaches the 20 kHz effective ceiling.
 
 ### SHAPE (0-100%)
 

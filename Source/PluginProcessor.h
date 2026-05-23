@@ -82,6 +82,9 @@ public:
 	static constexpr int kSeriesMax = 4;
 	static constexpr int kSeriesDefault = 1;
 
+	static constexpr float kFreqMin = 20.0f;
+	static constexpr float kFreqBaseMax = 5000.0f;
+	static constexpr float kFreqEffectiveMax = 20000.0f;
 	static constexpr float kFreqDefault = 1000.0f;
 	static constexpr float kShapeDefault = 0.0f;
 	static constexpr float kJitterMin = 0.0f;
@@ -318,8 +321,8 @@ private:
 	static constexpr float kJitterFeedbackOutputLimit = 1.0f;
 	static constexpr float kJitterFrequencyDepthScale = 2.0f;
 	static constexpr float kJitterShapeDepthScale = 0.45f;
-	static constexpr float kJitterCoeffSmoothMinSeconds = 0.018f;
-	static constexpr float kJitterCoeffSmoothMaxSeconds = 0.080f;
+	static constexpr float kJitterCoeffSmoothMinSeconds = 0.0f;
+	static constexpr float kJitterCoeffSmoothMaxSeconds = 0.05f;
 	static constexpr int kCoeffUpdateInterval = 32;
 	static constexpr double kSeriesCrossfadeMs = 20.0;
 	int activeStages = 0;
