@@ -226,8 +226,8 @@ Limiter insertion point:
 
 The limiter is a stereo-linked dual-stage design:
 
-- **Stage 1 - leveler**: 2 ms attack, 10 ms release
-- **Stage 2 - brickwall**: instant attack, 100 ms release
+- **Stage 1 - leveler**: catches sustained overs.
+- **Stage 2 - brickwall**: catches transient peaks.
 
 ## Signal Flow
 
