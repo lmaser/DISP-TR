@@ -347,14 +347,11 @@ void DisperserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 	// Reset limiter state and precompute coefficients
 	limEnv1_[0] = limEnv1_[1] = kLimFloor;
 	limEnv2_[0] = limEnv2_[1] = kLimFloor;
-	limEnv3_[0] = limEnv3_[1] = kLimFloor;
 	{
 		const float sr = (float) getSampleRate();
-		limAtt1_ = std::exp (-1.0f / (sr * 0.200f));
-		limRel1_ = std::exp (-1.0f / (sr * 0.500f));
-		limAtt2_ = std::exp (-1.0f / (sr * 0.010f));
-		limRel2_ = std::exp (-1.0f / (sr * 0.250f));
-		limRel3_ = std::exp (-1.0f / (sr * 1.250f));
+		limAtt1_ = std::exp (-1.0f / (sr * 0.002f));
+		limRel1_ = std::exp (-1.0f / (sr * 0.010f));
+		limRel2_ = std::exp (-1.0f / (sr * 0.100f));
 	}
 
 #if JUCE_DEBUG

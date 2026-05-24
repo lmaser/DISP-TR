@@ -1012,103 +1012,78 @@ private:
 	static constexpr float kLimThresholdDefault = 0.0f;
 	static constexpr int   kLimModeDefault      = 0;   // 0=NONE  1=WET  2=GLOBAL
 
-	// Multi-stage transparent limiter state (stereo-linked)
+	// Dual-stage transparent limiter state (stereo-linked)
 	static constexpr float kLimFloor = 1.0e-12f;
-	static constexpr float kLimPreBrickwallHeadroomDb = 3.0f;
 	float limEnv1_[2] = { kLimFloor, kLimFloor };
 	float limEnv2_[2] = { kLimFloor, kLimFloor };
-	float limEnv3_[2] = { kLimFloor, kLimFloor };
 	float limAtt1_ = 0.0f;
 	float limRel1_ = 0.0f;
-	float limAtt2_ = 0.0f;
 	float limRel2_ = 0.0f;
-	float limRel3_ = 0.0f;
-
-	static inline void updateLimiterEnvelope (float& env, float peak, float attackCoeff, float releaseCoeff) noexcept
-	{
-		if (peak > env)
-			env = attackCoeff * env + (1.0f - attackCoeff) * peak;
-		else
-			env = releaseCoeff * env + (1.0f - releaseCoeff) * peak;
-
-		if (env < kLimFloor)
-			env = kLimFloor;
-	}
-
-	static inline void updateLimiterBrickwallEnvelope (float& env, float peak, float releaseCoeff) noexcept
-	{
-		if (peak > env)
-			env = peak;
-		else
-			env = releaseCoeff * env + (1.0f - releaseCoeff) * peak;
-
-		if (env < kLimFloor)
-			env = kLimFloor;
-	}
-
-	static inline float getStereoLinkedLimiterGain (const float env[2], float ceilingLin) noexcept
-	{
-		const float maxEnv = juce::jmax (env[0], env[1]);
-		return maxEnv > ceilingLin ? ceilingLin / maxEnv : 1.0f;
-	}
 
 	inline void applyLimiter (float& sampleL, float& sampleR, float threshLin) noexcept
 	{
-		// Stage 1 - slow program leveler.
+		const float peakL = std::abs (sampleL);
+		const float peakR = std::abs (sampleR);
+
+		// Stage 1 - leveler (2 ms attack, 10 ms release)
 		for (int ch = 0; ch < 2; ++ch)
 		{
-			const float peak = std::abs (ch == 0 ? sampleL : sampleR);
-			updateLimiterEnvelope (limEnv1_[ch], peak, limAtt1_, limRel1_);
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv1_[ch])
+				limEnv1_[ch] = limAtt1_ * limEnv1_[ch] + (1.0f - limAtt1_) * p;
+			else
+				limEnv1_[ch] = limRel1_ * limEnv1_[ch] + (1.0f - limRel1_) * p;
+			if (limEnv1_[ch] < kLimFloor) limEnv1_[ch] = kLimFloor;
 		}
 
-		const float gr1 = getStereoLinkedLimiterGain (limEnv1_, threshLin);
-		sampleL *= gr1;
-		sampleR *= gr1;
-
-		// Stage 2 - crest control with 3 dB of headroom before the final catch.
-		const float preBrickwallCeiling = threshLin * juce::Decibels::decibelsToGain (-kLimPreBrickwallHeadroomDb);
+		// Stage 2 - brickwall (instant attack, 100 ms release)
 		for (int ch = 0; ch < 2; ++ch)
 		{
-			const float peak = std::abs (ch == 0 ? sampleL : sampleR);
-			updateLimiterEnvelope (limEnv2_[ch], peak, limAtt2_, limRel2_);
+			const float p = (ch == 0) ? peakL : peakR;
+			if (p > limEnv2_[ch])
+				limEnv2_[ch] = p;
+			else
+				limEnv2_[ch] = limRel2_ * limEnv2_[ch] + (1.0f - limRel2_) * p;
+			if (limEnv2_[ch] < kLimFloor) limEnv2_[ch] = kLimFloor;
 		}
 
-		const float gr2 = getStereoLinkedLimiterGain (limEnv2_, preBrickwallCeiling);
-		sampleL *= gr2;
-		sampleR *= gr2;
+		// Stereo-linked gain reduction
+		float gr = 1.0f;
+		const float maxEnv1 = juce::jmax (limEnv1_[0], limEnv1_[1]);
+		const float maxEnv2 = juce::jmax (limEnv2_[0], limEnv2_[1]);
+		if (maxEnv1 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv1);
+		if (maxEnv2 > threshLin)
+			gr = juce::jmin (gr, threshLin / maxEnv2);
 
-		// Stage 3 - final sample catch. It should only handle residual peaks.
-		for (int ch = 0; ch < 2; ++ch)
-		{
-			const float peak = std::abs (ch == 0 ? sampleL : sampleR);
-			updateLimiterBrickwallEnvelope (limEnv3_[ch], peak, limRel3_);
-		}
-
-		const float gr3 = getStereoLinkedLimiterGain (limEnv3_, threshLin);
-		sampleL *= gr3;
-		sampleR *= gr3;
+		sampleL *= gr;
+		sampleR *= gr;
 	}
 
 	inline void applyLimiterMono (float& sample, float threshLin) noexcept
 	{
-		updateLimiterEnvelope (limEnv1_[0], std::abs (sample), limAtt1_, limRel1_);
+		const float peak = std::abs (sample);
+		if (peak > limEnv1_[0])
+			limEnv1_[0] = limAtt1_ * limEnv1_[0] + (1.0f - limAtt1_) * peak;
+		else
+			limEnv1_[0] = limRel1_ * limEnv1_[0] + (1.0f - limRel1_) * peak;
+		if (limEnv1_[0] < kLimFloor) limEnv1_[0] = kLimFloor;
 
-		const float gr1 = limEnv1_[0] > threshLin ? threshLin / limEnv1_[0] : 1.0f;
-		sample *= gr1;
+		if (peak > limEnv2_[0])
+			limEnv2_[0] = peak;
+		else
+			limEnv2_[0] = limRel2_ * limEnv2_[0] + (1.0f - limRel2_) * peak;
+		if (limEnv2_[0] < kLimFloor) limEnv2_[0] = kLimFloor;
 
-		const float preBrickwallCeiling = threshLin * juce::Decibels::decibelsToGain (-kLimPreBrickwallHeadroomDb);
-		updateLimiterEnvelope (limEnv2_[0], std::abs (sample), limAtt2_, limRel2_);
+		float gr = 1.0f;
+		if (limEnv1_[0] > threshLin)
+			gr = juce::jmin (gr, threshLin / limEnv1_[0]);
+		if (limEnv2_[0] > threshLin)
+			gr = juce::jmin (gr, threshLin / limEnv2_[0]);
 
-		const float gr2 = limEnv2_[0] > preBrickwallCeiling ? preBrickwallCeiling / limEnv2_[0] : 1.0f;
-		sample *= gr2;
-
-		updateLimiterBrickwallEnvelope (limEnv3_[0], std::abs (sample), limRel3_);
-
-		const float gr3 = limEnv3_[0] > threshLin ? threshLin / limEnv3_[0] : 1.0f;
-		sample *= gr3;
+		sample *= gr;
 		limEnv1_[1] = limEnv1_[0];
 		limEnv2_[1] = limEnv2_[0];
-		limEnv3_[1] = limEnv3_[0];
 	}
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DisperserAudioProcessor)
