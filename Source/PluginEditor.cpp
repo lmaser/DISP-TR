@@ -4346,8 +4346,8 @@ juce::String DisperserAudioProcessorEditor::getModTextShort() const
 {
     const float mult = (float) modSliderToMultiplier (modSlider.getValue());
     if (std::abs (mult - 1.0f) < kMultEpsilon)
-        return "X1";
-    return "X" + juce::String (mult, 2);
+        return "X1 MOD";
+    return "X" + juce::String (mult, 2) + " MOD";
 }
 
 juce::String DisperserAudioProcessorEditor::getMixText() const
@@ -4379,7 +4379,7 @@ juce::String DisperserAudioProcessorEditor::getMixTextShort() const
         return juce::String (dB, 1) + "dB" + suffix;
     }
     const double v = juce::jlimit (0.0, 1.0, mixSlider.getValue());
-    return juce::String ((int) std::lround (v * 100.0)) + "% MX";
+    return juce::String ((int) std::lround (v * 100.0)) + "% MIX";
 }
 
 juce::String DisperserAudioProcessorEditor::getInputText() const
@@ -4497,7 +4497,7 @@ namespace
     constexpr const char* kTiltLegendInt   = "-6.0dB";
 
     constexpr const char* kMixLegendFull  = "100% MIX";
-    constexpr const char* kMixLegendShort = "100% MX";
+    constexpr const char* kMixLegendShort = "100% MIX";
     constexpr const char* kMixLegendInt   = "100%";
 
     constexpr const char* kLimLegendFull  = "-36.0 dB LIM";
