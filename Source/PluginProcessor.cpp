@@ -1092,17 +1092,23 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				}
 			}
 		}
-		else if (chaosDelayEnabled_)
+		else
 		{
-			for (int n = 0; n < numSamples; ++n)
+			feedbackLastL = 0.0f;
+			feedbackLastR = 0.0f;
+
+			if (chaosDelayEnabled_)
 			{
-				float sourceL = ch0[n];
-				float sourceR = hasStereo ? ch1[n] : sourceL;
-				advanceChaosD();
-				applyChaosDelay (sourceL, sourceR);
-				ch0[n] = sourceL;
-				if (hasStereo)
-					ch1[n] = sourceR;
+				for (int n = 0; n < numSamples; ++n)
+				{
+					float sourceL = ch0[n];
+					float sourceR = hasStereo ? ch1[n] : sourceL;
+					advanceChaosD();
+					applyChaosDelay (sourceL, sourceR);
+					ch0[n] = sourceL;
+					if (hasStereo)
+						ch1[n] = sourceR;
+				}
 			}
 		}
 
@@ -1375,11 +1381,17 @@ void DisperserAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 				feedbackLastR = processR ? xR : xL;
 			}
 		}
-		else if (chaosDelayEnabled_)
+		else
 		{
-			ch0[n] = sourceL;
-			if (hasStereo)
-				ch1[n] = sourceR;
+			feedbackLastL = 0.0f;
+			feedbackLastR = 0.0f;
+
+			if (chaosDelayEnabled_)
+			{
+				ch0[n] = sourceL;
+				if (hasStereo)
+					ch1[n] = sourceR;
+			}
 		}
 	}
 	} // end else (slow path)
