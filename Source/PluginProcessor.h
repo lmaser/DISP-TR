@@ -319,6 +319,7 @@ private:
 	static constexpr float kJitterFeedbackFastWeightBase = 0.24f;
 	static constexpr float kJitterFeedbackFastShortnessWeight = 0.28f;
 	static constexpr float kJitterFeedbackOutputLimit = 1.0f;
+	static constexpr bool kJitterModulatesFeedback = false;
 	static constexpr float kJitterFrequencyDepthScale = 2.0f;
 	static constexpr float kJitterShapeDepthScale = 0.45f;
 	static constexpr float kJitterCoeffSmoothMinSeconds = 0.0f;
@@ -620,6 +621,9 @@ private:
 	static float applyJitterToFeedback (float feedback, float modOut, float depth) noexcept
 	{
 		const float fb = juce::jlimit (-1.0f, 1.0f, feedback);
+		if (! kJitterModulatesFeedback)
+			return fb;
+
 		const float mag = std::abs (fb);
 		if (mag <= kJitterEpsilon)
 			return fb;
