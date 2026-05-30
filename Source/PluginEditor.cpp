@@ -2411,7 +2411,7 @@ void DisperserAudioProcessorEditor::openNumericEntryPopupForSlider (juce::Slider
 
             if (safeThis != nullptr && sliderPtr == &safeThis->freqSlider)
             {
-                clamped = roundToDecimals (clamped, 4);
+                clamped = roundToDecimals (clamped, 3);
             }
 
             sliderPtr->setValue (clamped, juce::sendNotificationSync);
@@ -4298,11 +4298,11 @@ juce::String DisperserAudioProcessorEditor::getFreqText() const
 juce::String DisperserAudioProcessorEditor::getFreqTextShort() const
 {
     if (cachedMidiDisplay.isNotEmpty() && ! freqSlider.isMouseButtonDown())
-        return cachedMidiDisplay + " FRQ";
+        return cachedMidiDisplay + " FREQ";
 
     const double hz = freqSlider.getValue();
 
-    return formatInlineFrequency (hz) + " FRQ";
+    return formatInlineFrequency (hz) + " FREQ";
 }
 
 juce::String DisperserAudioProcessorEditor::getShapeText() const
