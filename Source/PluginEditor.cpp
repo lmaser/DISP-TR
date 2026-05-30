@@ -1447,7 +1447,7 @@ bool DisperserAudioProcessorEditor::refreshLegendTextCache()
     cachedShapeTextShort = juce::String (shapePct) + "% SHP";
     cachedShapeIntOnly = juce::String (shapePct) + "%";
 
-    cachedJitterTextFull = juce::String (jitterPct).toUpperCase() + "% JIT";
+    cachedJitterTextFull = juce::String (jitterPct).toUpperCase() + "% JITTER";
     cachedJitterTextShort = juce::String (jitterPct).toUpperCase() + "% JIT";
     cachedJitterIntOnly = juce::String (jitterPct);
 
@@ -4319,7 +4319,7 @@ juce::String DisperserAudioProcessorEditor::getJitterText() const
 {
     const double v = juce::jlimit (0.0, 1.0, jitterSlider.getValue());
     const int pctInt = (int) std::lround (v * 100.0);
-    return juce::String (pctInt).toUpperCase() + "% JIT";
+    return juce::String (pctInt).toUpperCase() + "% JITTER";
 }
 
 juce::String DisperserAudioProcessorEditor::getJitterTextShort() const
@@ -4495,7 +4495,7 @@ namespace
     constexpr const char* kShapeLegendShort  = "100% SHP";
     constexpr const char* kShapeLegendInt    = "100%";
 
-    constexpr const char* kJitterLegendFull  = "100% JIT";
+    constexpr const char* kJitterLegendFull  = "100% JITTER";
     constexpr const char* kJitterLegendShort = "100% JIT";
     constexpr const char* kJitterLegendInt   = "100";
 
