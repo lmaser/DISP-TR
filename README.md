@@ -31,7 +31,7 @@ DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, a
 - **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM`, filter controls, routing/mode combos, invert options, and chaos toggles.
 - **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
 - **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
-- **MIDI channel prompt**: Right-click the MIDI channel legend when `MIDI` is enabled to choose omni or a fixed channel.
+- **MIDI prompt**: Right-click the MIDI channel legend when `MIDI` is enabled to choose omni or a fixed channel, and set `0-100 ms` of MIDI delay.
 - **Gear icon**: Opens the info popup with version, credits, and access to graphics settings.
 - **Graphics popup**: Controls CRT tail/post-processing and colour palette options.
 - **Resize**: Drag the bottom-right corner. New instances open at `360 x 752`, editor width persists, and height stays fixed.
@@ -193,7 +193,7 @@ Each can be applied to:
 
 Enables MIDI note tracking for `FREQUENCY`.
 When active, note-on pitch becomes the frequency target.
-MIDI velocity influences glide speed, and the channel can be set to omni or a specific input channel via the MIDI channel prompt.
+MIDI velocity influences glide speed, and the prompt can set omni or a specific input channel plus `0-100 ms` of MIDI delay to offset control later against the audio input.
 
 ### CHAOS
 

@@ -89,12 +89,10 @@ static double multiplierToModSlider (double mult)
     return kModCenter + (mult - 1.0) * kModCenter / kModScale;
 }
 
-static juce::String formatMidiChannelTooltip (int ch)
+static juce::String formatMidiChannelTooltip (int ch, int delayMs = 0)
 {
-    if (ch <= 0)
-        return "OMNI";
-
-    return "CHANNEL " + juce::String (ch);
+    return juce::String (ch <= 0 ? "OMNI" : "CHANNEL " + juce::String (ch))
+         + " | DLY " + juce::String (juce::jlimit (0, 100, delayMs)) + "ms";
 }
 
 static juce::String formatChaosTooltip (float amountPercent, float speedHz)
@@ -974,7 +972,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         midiChannelDisplay.setText ("", juce::dontSendNotification);
         midiChannelDisplay.setInterceptsMouseClicks (true, false);
         midiChannelDisplay.addMouseListener (this, false);
-        midiChannelDisplay.setTooltip (formatMidiChannelTooltip (savedChannel));
+        midiChannelDisplay.setTooltip (formatMidiChannelTooltip (savedChannel, audioProcessor.getMidiDelayMs()));
         midiChannelDisplay.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
         midiChannelDisplay.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
         midiChannelDisplay.setOpaque (false);
@@ -2894,136 +2892,301 @@ void DisperserAudioProcessorEditor::openMidiChannelPrompt()
     lnf.setScheme (activeScheme);
     const auto scheme = activeScheme;
 
-    const int currentChannel = audioProcessor.getMidiChannel();
+    const int channel = audioProcessor.getMidiChannel();
+    const int delayMs = audioProcessor.getMidiDelayMs();
+
+    struct PromptBar : public juce::Component
+    {
+        DISPScheme colours;
+        float value01 = 0.0f;
+        float default01 = 0.0f;
+        std::function<void (float)> onValueChanged;
+
+        PromptBar (const DISPScheme& s, float initial01, float def01)
+            : colours (s), value01 (initial01), default01 (def01) {}
+
+        void paint (juce::Graphics& g) override
+        {
+            const auto r = getLocalBounds().toFloat();
+            g.setColour (colours.outline);
+            g.drawRect (r, 4.0f);
+            const float pad = 7.0f;
+            auto inner = r.reduced (pad);
+            g.setColour (colours.bg);
+            g.fillRect (inner);
+            const float fillW = juce::jlimit (0.0f, inner.getWidth(), inner.getWidth() * value01);
+            g.setColour (colours.fg);
+            g.fillRect (inner.withWidth (fillW));
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override { updateFromMouse (e); }
+        void mouseDrag (const juce::MouseEvent& e) override { updateFromMouse (e); }
+        void mouseDoubleClick (const juce::MouseEvent&) override { setValue (default01); }
+
+        void setValue (float v01)
+        {
+            value01 = juce::jlimit (0.0f, 1.0f, v01);
+            repaint();
+            if (onValueChanged)
+                onValueChanged (value01);
+        }
+
+        void setValueSilently (float v01)
+        {
+            value01 = juce::jlimit (0.0f, 1.0f, v01);
+            repaint();
+        }
+
+        void updateFromMouse (const juce::MouseEvent& e)
+        {
+            const float w = (float) juce::jmax (1, getWidth());
+            setValue (juce::jlimit (0.0f, 1.0f, e.position.x / w));
+        }
+    };
 
     auto* aw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
     aw->setLookAndFeel (&lnf);
+    aw->addTextEditor ("channel", juce::String (channel), juce::String());
+    aw->addTextEditor ("delay", juce::String (delayMs), juce::String());
+    auto* delayBar = new PromptBar (scheme, (float) delayMs / 100.0f, 0.0f);
+    aw->addAndMakeVisible (delayBar);
 
-    aw->addTextEditor ("val", juce::String (currentChannel), juce::String());
+    juce::Label* channelLabel = nullptr;
+    juce::Label* delayLabel = nullptr;
+    juce::Label* delayUnitLabel = nullptr;
 
-    juce::Label* suffixLabel = nullptr;
-    juce::Rectangle<int> editorBaseBounds;
-    std::function<void()> layoutValueAndSuffix;
-
-    if (auto* te = aw->getTextEditor ("val"))
+    struct MidiChannelInputFilter : juce::TextEditor::InputFilter
     {
-        const auto& f = kBoldFont40();
-        te->setFont (f);
-        te->applyFontToAllText (f);
-
-        auto r = te->getBounds();
-        r.setHeight ((int) (f.getHeight() * kPromptEditorHeightScale) + kPromptEditorHeightPadPx);
-        r.setY (juce::jmax (kPromptEditorMinTopPx, r.getY() - kPromptEditorRaiseYPx));
-        editorBaseBounds = r;
-
-        suffixLabel = new juce::Label ("suffix", "CHANNEL");
-        suffixLabel->setComponentID (kPromptSuffixLabelId);
-        suffixLabel->setJustificationType (juce::Justification::centredLeft);
-        applyLabelTextColour (*suffixLabel, scheme.text);
-        suffixLabel->setBorderSize (juce::BorderSize<int> (0));
-        suffixLabel->setFont (f);
-        aw->addAndMakeVisible (suffixLabel);
-
-        const int maxInputTextW = juce::jmax (1, stringWidth (f, "16"));
-        const juce::String suffixText = "CHANNEL";
-
-        // legendFirst: label BEFORE input
-        layoutValueAndSuffix = [aw, te, suffixLabel, editorBaseBounds, maxInputTextW, suffixText]()
+        juce::String filterNewText (juce::TextEditor& editor, const juce::String& newText) override
         {
+            juce::String result;
+            for (auto c : newText)
+            {
+                if (juce::CharacterFunctions::isDigit (c)) result += c;
+                if (result.length() >= 2) break;
+            }
+            juce::String proposed = editor.getText();
+            const int insertPos = editor.getCaretPosition();
+            proposed = proposed.substring (0, insertPos) + result
+                     + proposed.substring (insertPos + editor.getHighlightedText().length());
+            if (proposed.length() > 2 || proposed.getIntValue() > 16) return juce::String();
+            if (proposed.length() > 1 && proposed[0] == '0') return juce::String();
+            return result;
+        }
+    };
+
+    struct MidiDelayInputFilter : juce::TextEditor::InputFilter
+    {
+        juce::String filterNewText (juce::TextEditor& editor, const juce::String& newText) override
+        {
+            juce::String result;
+            for (auto c : newText)
+            {
+                if (juce::CharacterFunctions::isDigit (c)) result += c;
+                if (result.length() >= 3) break;
+            }
+
+            juce::String proposed = editor.getText();
+            const int insertPos = editor.getCaretPosition();
+            proposed = proposed.substring (0, insertPos) + result
+                     + proposed.substring (insertPos + editor.getHighlightedText().length());
+            if (proposed.length() > 3 || proposed.getIntValue() > 100) return juce::String();
+            return result;
+        }
+    };
+
+    std::function<void()> layoutRows;
+    auto applyLiveMidiDelay = [proc = &audioProcessor] (int newDelayMs)
+    {
+        proc->setMidiDelayMs (juce::jlimit (0, 100, newDelayMs));
+    };
+
+    if (auto* channelTe = aw->getTextEditor ("channel"))
+    {
+        auto* delayTe = aw->getTextEditor ("delay");
+        jassert (delayTe != nullptr);
+
+        const auto& valueFont = kBoldFont40();
+        const auto unitFont = valueFont.withHeight (34.0f);
+
+        channelTe->setFont (valueFont);
+        channelTe->applyFontToAllText (valueFont);
+        delayTe->setFont (valueFont);
+        delayTe->applyFontToAllText (valueFont);
+
+        channelLabel = new juce::Label ("channelLabel", "CHANNEL");
+        channelLabel->setJustificationType (juce::Justification::centredLeft);
+        applyLabelTextColour (*channelLabel, scheme.text);
+        channelLabel->setBorderSize (juce::BorderSize<int> (0));
+        channelLabel->setFont (valueFont);
+        aw->addAndMakeVisible (channelLabel);
+
+        delayLabel = new juce::Label ("delayLabel", "DELAY");
+        delayLabel->setJustificationType (juce::Justification::centredLeft);
+        applyLabelTextColour (*delayLabel, scheme.text);
+        delayLabel->setBorderSize (juce::BorderSize<int> (0));
+        delayLabel->setFont (valueFont);
+        aw->addAndMakeVisible (delayLabel);
+
+        delayUnitLabel = new juce::Label ("delayUnitLabel", "ms");
+        delayUnitLabel->setJustificationType (juce::Justification::centredLeft);
+        applyLabelTextColour (*delayUnitLabel, scheme.text);
+        delayUnitLabel->setBorderSize (juce::BorderSize<int> (0));
+        delayUnitLabel->setFont (unitFont);
+        aw->addAndMakeVisible (delayUnitLabel);
+
+        auto layoutChannelRow = [aw] (juce::TextEditor& editor,
+                                      juce::Label& label,
+                                      int reservedValueTextW,
+                                      int y,
+                                      int rowH)
+        {
+            const auto txt = editor.getText();
+            const int textW = juce::jmax (1, stringWidth (editor.getFont(), txt));
+            const int spaceW = juce::jmax (2, stringWidth (editor.getFont(), " "));
+            const int labelW = stringWidth (label.getFont(), label.getText()) + 2;
             const int contentPad = kPromptInlineContentPadPx;
             const int contentLeft = contentPad;
-            const int contentRight = (aw != nullptr ? aw->getWidth() - contentPad : editorBaseBounds.getRight());
-            const int contentCenter = (contentLeft + contentRight) / 2;
-
-            const int labelW = stringWidth (suffixLabel->getFont(), suffixText) + 2;
-            const int spaceW = juce::jmax (2, stringWidth (suffixLabel->getFont(), " "));
-            const auto txt = te->getText();
-            const int textW = juce::jmax (1, stringWidth (te->getFont(), txt));
-
-            constexpr int kEditorTextPadPx = 12;
+            const int contentRight = aw->getWidth() - contentPad;
+            const int innerW = contentRight - contentLeft;
             constexpr int kMinEditorWidthPx = 24;
-            auto er = te->getBounds();
-            const int editorW = juce::jlimit (kMinEditorWidthPx,
-                                              editorBaseBounds.getWidth(),
-                                              textW + (kEditorTextPadPx * 2));
-            er.setWidth (editorW);
+            constexpr int kEditorTextPadPx = 16;
+            const int effectiveValueTextW = juce::jmax (textW, reservedValueTextW);
+            int editorW = effectiveValueTextW + kEditorTextPadPx;
+            const int maxFittedEditorW = juce::jmax (kMinEditorWidthPx,
+                                                     innerW - labelW - spaceW);
+            editorW = juce::jlimit (kMinEditorWidthPx, maxFittedEditorW, editorW);
 
-            // legendFirst: [CHANNEL] [value]
-            const int combinedW = labelW + spaceW + textW;
-            int blockLeft = contentCenter - (combinedW / 2);
-            blockLeft = juce::jlimit (contentLeft,
-                                      juce::jmax (contentLeft, contentRight - combinedW),
-                                      blockLeft);
+            const int visualW = labelW + spaceW + textW;
+            const int blockLeft = contentLeft + juce::jmax (0, (innerW - visualW) / 2);
 
-            int labelX = blockLeft;
-            labelX = juce::jlimit (contentLeft,
-                                   juce::jmax (contentLeft, contentRight - labelW),
-                                   labelX);
-            suffixLabel->setBounds (labelX, er.getY(), labelW, juce::jmax (1, er.getHeight()));
+            label.setBounds (blockLeft, y, labelW, rowH);
 
-            int teX = labelX + labelW + spaceW - ((editorW - textW) / 2);
-            teX = juce::jlimit (contentLeft,
-                                juce::jmax (contentLeft, contentRight - editorW),
-                                teX);
-            er.setX (teX);
-            te->setBounds (er);
+            int teX = blockLeft + labelW + spaceW - ((editorW - textW) / 2);
+            teX = juce::jlimit (contentLeft, juce::jmax (contentLeft, contentRight - editorW), teX);
+            editor.setBounds (teX, y, editorW, rowH);
         };
 
-        te->setBounds (editorBaseBounds);
-        int labelW0 = stringWidth (suffixLabel->getFont(), suffixText) + 2;
-        suffixLabel->setBounds (r.getX() - labelW0 - 4, r.getY() + 1, labelW0, juce::jmax (1, r.getHeight() - 2));
-
-        if (layoutValueAndSuffix)
-            layoutValueAndSuffix();
-
-        struct MidiChannelInputFilter : public juce::TextEditor::InputFilter
+        auto layoutDelayRow = [aw] (juce::TextEditor& editor,
+                                    juce::Label& label,
+                                    juce::Label& unitLabel,
+                                    int reservedValueTextW,
+                                    int y,
+                                    int rowH)
         {
-            juce::String filterNewText (juce::TextEditor& editor, const juce::String& newInput) override
+            const auto txt = editor.getText();
+            const int spaceW = juce::jmax (2, stringWidth (editor.getFont(), " "));
+            const int labelW = stringWidth (label.getFont(), label.getText()) + 2;
+            const int unitW = stringWidth (unitLabel.getFont(), unitLabel.getText()) + 2;
+            const int contentLeft = kPromptInnerMargin;
+            const int contentRight = aw->getWidth() - kPromptInnerMargin;
+            const int innerW = contentRight - contentLeft;
+            const int delayMs = juce::jlimit (0, 100, txt.getIntValue());
+
+            constexpr int kMinEditorWidthPx = 24;
+            constexpr int kUnitGapPx = 4;
+            const int baseLabelGap = juce::jmax (spaceW, 12);
+            const int sideTextPad = spaceW;
+            const int singleEditorW = juce::jmax (kMinEditorWidthPx, stringWidth (editor.getFont(), "0") + sideTextPad * 2);
+            const int doubleEditorW = juce::jmax (singleEditorW, stringWidth (editor.getFont(), "10") + sideTextPad * 2);
+            const int tripleEditorW = juce::jmax (doubleEditorW, reservedValueTextW + sideTextPad * 2);
+
+            int editorW = tripleEditorW;
+            int labelGap = baseLabelGap;
+
+            if (delayMs >= 100)
             {
-                juce::String filtered;
-                for (int i = 0; i < newInput.length(); ++i)
-                {
-                    const auto c = newInput[i];
-                    if (c >= '0' && c <= '9')
-                        filtered += c;
-                }
-                const auto combined = editor.getText() + filtered;
-                if (combined.length() > 2)
-                    return {};
-                const int val = combined.getIntValue();
-                if (val > 16)
-                    return {};
-                if (combined.length() > 1 && combined[0] == '0')
-                    return {};
-                return filtered;
+                editorW = tripleEditorW;
+                labelGap = baseLabelGap;
             }
+            else if (delayMs >= 10)
+            {
+                editorW = doubleEditorW;
+                labelGap = baseLabelGap + 4;
+            }
+            else
+            {
+                editorW = singleEditorW;
+                labelGap = baseLabelGap + 8;
+            }
+
+            const int maxFittedEditorW = juce::jmax (kMinEditorWidthPx,
+                                                     innerW - labelW - labelGap - (kUnitGapPx + unitW));
+            editorW = juce::jmin (editorW, maxFittedEditorW);
+
+            const int groupW = labelW + labelGap + editorW + kUnitGapPx + unitW;
+            const int blockLeft = contentLeft + juce::jmax (0, (innerW - groupW) / 2);
+
+            label.setBounds (blockLeft, y, labelW, rowH);
+            const int teX = blockLeft + labelW + labelGap;
+            editor.setBounds (teX, y, editorW, rowH);
+            unitLabel.setBounds (teX + editorW + kUnitGapPx, y, unitW, rowH);
         };
 
-        te->setInputFilter (new MidiChannelInputFilter(), true);
-
-        te->onTextChange = [te, layoutValueAndSuffix]() mutable
+        layoutRows = [aw, channelTe, delayTe, channelLabel, delayLabel, delayUnitLabel, delayBar,
+                      layoutChannelRow, layoutDelayRow]()
         {
-            if (layoutValueAndSuffix)
-                layoutValueAndSuffix();
+            if (channelTe == nullptr || delayTe == nullptr || channelLabel == nullptr || delayLabel == nullptr || delayBar == nullptr)
+                return;
+
+            const int buttonsTop = getAlertButtonsTop (*aw);
+            const int rowH = juce::jmax (1, channelTe->getHeight());
+            const int barH = juce::jmax (10, rowH / 2);
+            constexpr int kRowGapPx = 20;
+            const int barGap = juce::jmax (8, rowH / 4);
+            const int totalH = rowH + kRowGapPx + rowH + barGap + barH;
+            const int startY = juce::jmax (kPromptEditorMinTopPx, (buttonsTop - totalH) / 2);
+            const int channelY = startY;
+            const int delayY = channelY + rowH + kRowGapPx;
+            const int channelReservedTextW = juce::jmax (1, stringWidth (channelTe->getFont(), "16"));
+            const int delayReservedTextW = juce::jmax (1, stringWidth (delayTe->getFont(), "100"));
+
+            layoutChannelRow (*channelTe, *channelLabel, channelReservedTextW, channelY, rowH);
+            layoutDelayRow (*delayTe, *delayLabel, *delayUnitLabel, delayReservedTextW, delayY, rowH);
+
+            const int barX = kPromptInnerMargin;
+            const int barW = juce::jmax (120, aw->getWidth() - (kPromptInnerMargin * 2));
+            const int barY = delayY + rowH + barGap;
+            delayBar->setBounds (barX, barY, barW, barH);
+        };
+
+        if (layoutRows) layoutRows();
+        channelTe->setInputFilter (new MidiChannelInputFilter(), true);
+        delayTe->setInputFilter (new MidiDelayInputFilter(), true);
+        channelTe->onTextChange = [layoutRows]() mutable { if (layoutRows) layoutRows(); };
+        delayTe->onTextChange = [layoutRows, delayTe, delayBar, applyLiveMidiDelay]() mutable
+        {
+            if (delayBar != nullptr && delayTe != nullptr)
+            {
+                const int parsed = juce::jlimit (0, 100, delayTe->getText().getIntValue());
+                delayBar->setValueSilently ((float) parsed / 100.0f);
+                applyLiveMidiDelay (parsed);
+            }
+            if (layoutRows) layoutRows();
+        };
+        delayBar->onValueChanged = [delayTe, layoutRows, applyLiveMidiDelay] (float value01) mutable
+        {
+            if (delayTe == nullptr)
+                return;
+            const int delayValue = juce::jlimit (0, 100, (int) std::lround (value01 * 100.0f));
+            const juce::String text (delayValue);
+            if (delayTe->getText() != text)
+                delayTe->setText (text, juce::dontSendNotification);
+            applyLiveMidiDelay (delayValue);
+            if (layoutRows) layoutRows();
         };
     }
 
     aw->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
     aw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
     applyPromptShellSize (*aw);
+    aw->setSize (aw->getWidth(), aw->getHeight() + 72);
     layoutAlertWindowButtons (*aw);
 
     const juce::Font& kPromptFont = kBoldFont40();
-
-    preparePromptTextEditor (*aw, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
-
-    if (suffixLabel != nullptr && ! editorBaseBounds.isEmpty())
-    {
-        if (auto* te = aw->getTextEditor ("val"))
-            suffixLabel->setFont (te->getFont());
-        if (layoutValueAndSuffix)
-            layoutValueAndSuffix();
-    }
+    preparePromptTextEditor (*aw, "channel", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+    preparePromptTextEditor (*aw, "delay", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+    if (layoutRows) layoutRows();
 
     styleAlertButtons (*aw, lnf);
 
@@ -3034,12 +3197,10 @@ void DisperserAudioProcessorEditor::openMidiChannelPrompt()
 
     if (safeThis != nullptr)
     {
-        fitAlertWindowToEditor (*aw, safeThis.getComponent(), [&] (juce::AlertWindow& a)
+        fitAlertWindowToEditor (*aw, safeThis.getComponent(), [layoutRows] (juce::AlertWindow& a)
         {
-            if (layoutValueAndSuffix)
-                layoutValueAndSuffix();
+            if (layoutRows) layoutRows();
             layoutAlertWindowButtons (a);
-            preparePromptTextEditor (a, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
         });
 
         embedAlertWindowInOverlay (safeThis.getComponent(), aw);
@@ -3052,15 +3213,10 @@ void DisperserAudioProcessorEditor::openMidiChannelPrompt()
     }
 
     {
-        preparePromptTextEditor (*aw, "val", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
-        if (auto* suffixLbl = dynamic_cast<juce::Label*> (aw->findChildWithID (kPromptSuffixLabelId)))
-        {
-            if (auto* te = aw->getTextEditor ("val"))
-                suffixLbl->setFont (te->getFont());
-        }
-
-        if (layoutValueAndSuffix)
-            layoutValueAndSuffix();
+        preparePromptTextEditor (*aw, "channel", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+        preparePromptTextEditor (*aw, "delay", scheme.bg, scheme.text, scheme.fg, kPromptFont, false);
+        if (layoutRows)
+            layoutRows();
 
         juce::Component::SafePointer<juce::AlertWindow> safeAw (aw);
         juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThisPtr (this);
@@ -3074,20 +3230,30 @@ void DisperserAudioProcessorEditor::openMidiChannelPrompt()
     }
 
     aw->enterModalState (true,
-        juce::ModalCallbackFunction::create ([safeThis, aw] (int result) mutable
+        juce::ModalCallbackFunction::create ([safeThis, aw, channel, delayMs] (int result) mutable
         {
             std::unique_ptr<juce::AlertWindow> killer (aw);
 
             if (safeThis != nullptr)
                 safeThis->setPromptOverlayActive (false);
 
-            if (safeThis == nullptr || result != 1)
+            if (safeThis == nullptr)
                 return;
 
-            const auto txt = aw->getTextEditorContents ("val").trim();
-            const int ch = juce::jlimit (0, 16, txt.isEmpty() ? 0 : txt.getIntValue());
+            if (result != 1)
+            {
+                safeThis->audioProcessor.setMidiDelayMs (delayMs);
+                safeThis->midiChannelDisplay.setTooltip (formatMidiChannelTooltip (channel, delayMs));
+                return;
+            }
+
+            const auto chTxt = aw->getTextEditorContents ("channel").trim();
+            const auto delayTxt = aw->getTextEditorContents ("delay").trim();
+            const int ch = juce::jlimit (0, 16, chTxt.isEmpty() ? 0 : chTxt.getIntValue());
+            const int midiDelay = juce::jlimit (0, 100, delayTxt.isEmpty() ? 0 : delayTxt.getIntValue());
             safeThis->audioProcessor.setMidiChannel (ch);
-            safeThis->midiChannelDisplay.setTooltip (formatMidiChannelTooltip (ch));
+            safeThis->audioProcessor.setMidiDelayMs (midiDelay);
+            safeThis->midiChannelDisplay.setTooltip (formatMidiChannelTooltip (ch, midiDelay));
         }));
 }
 
