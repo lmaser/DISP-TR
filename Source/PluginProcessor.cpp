@@ -2114,6 +2114,9 @@ void DisperserAudioProcessor::setStateInformation (const void* data, int sizeInB
 	const auto md = apvts.state.getProperty (UiStateKeys::midiDelayMs);
 	if (! md.isVoid()) midiDelayMs.store (juce::jlimit (0, 100, (int) md), std::memory_order_relaxed);
 
+	clearPendingMidiEvents();
+	clearMidiTrackingState();
+
 	for (int i = 0; i < 4; ++i)
 	{
 		const auto c = apvts.state.getProperty (UiStateKeys::customPalette[(size_t) i]);
