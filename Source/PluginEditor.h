@@ -119,6 +119,24 @@ private:
         bool allowNumericPopup = true;
     };
 
+    class MainGuiPromptToggleButton : public juce::ToggleButton
+    {
+    public:
+        using juce::ToggleButton::ToggleButton;
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isPopupMenu())
+                juce::ToggleButton::mouseDown (e);
+        }
+
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isPopupMenu())
+                juce::ToggleButton::mouseUp (e);
+        }
+    };
+
     BarSlider amountSlider;
     BarSlider seriesSlider;
     BarSlider freqSlider;
@@ -231,12 +249,12 @@ private:
     DualMixBarComponent dualMixBar_;
 
     juce::ToggleButton altButton;
-    juce::ToggleButton midiButton;
+    MainGuiPromptToggleButton midiButton;
     juce::Label midiChannelDisplay;
 
     // Chaos buttons
-    juce::ToggleButton chaosFilterButton;
-    juce::ToggleButton chaosDelayButton;
+    MainGuiPromptToggleButton chaosFilterButton;
+    MainGuiPromptToggleButton chaosDelayButton;
     juce::Label chaosFilterDisplay;
     juce::Label chaosDelayDisplay;
 
@@ -468,6 +486,8 @@ private:
     juce::Slider* getSliderForValueAreaPoint (juce::Point<int> p);
     juce::Rectangle<int> getAltLabelArea() const;
     juce::Rectangle<int> getMidiLabelArea() const;
+    juce::Rectangle<int> getChaosFilterLabelArea() const;
+    juce::Rectangle<int> getChaosDelayLabelArea() const;
     juce::Rectangle<int> getInfoIconArea() const;
     void updateInfoIconCache();
     bool refreshLegendTextCache();

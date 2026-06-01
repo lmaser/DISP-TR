@@ -5076,6 +5076,30 @@ juce::Rectangle<int> DisperserAudioProcessorEditor::getMidiLabelArea() const
     return makeToggleLabelArea (midiButton, getWidth() - kToggleLegendCollisionPadPx, "MIDI", "MIDI");
 }
 
+juce::Rectangle<int> DisperserAudioProcessorEditor::getChaosFilterLabelArea() const
+{
+    if (chaosFilterButton.getWidth() <= 0 || chaosFilterButton.getHeight() <= 0)
+        return {};
+
+    const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
+                                      (int) std::lround ((double) cachedVLayout_.box * 0.65));
+    const int labelX = chaosFilterButton.getX() + boxSide + 4 + 2;
+    const int labelR = chaosDelayButton.getX() - 6;
+    return { labelX, chaosFilterButton.getY(), juce::jmax (0, labelR - labelX), cachedVLayout_.box };
+}
+
+juce::Rectangle<int> DisperserAudioProcessorEditor::getChaosDelayLabelArea() const
+{
+    if (chaosDelayButton.getWidth() <= 0 || chaosDelayButton.getHeight() <= 0)
+        return {};
+
+    const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
+                                      (int) std::lround ((double) cachedVLayout_.box * 0.65));
+    const int labelX = chaosDelayButton.getX() + boxSide + 4 + 2;
+    const int labelR = getWidth() - 6;
+    return { labelX, chaosDelayButton.getY(), juce::jmax (0, labelR - labelX), cachedVLayout_.box };
+}
+
 juce::Rectangle<int> DisperserAudioProcessorEditor::getInfoIconArea() const
 {
     // Use a visible slider for content-right calculation in both modes
@@ -5144,13 +5168,7 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     // CHSF label click → toggle (left), config (right)
     if (chaosFilterButton.isVisible())
     {
-        const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
-                                          (int) std::lround ((double) cachedVLayout_.box * 0.65));
-        const int labelX = chaosFilterButton.getX() + boxSide + 4 + 2;
-        const int labelR = chaosDelayButton.getX() - 6;
-        auto chsFArea = juce::Rectangle<int> (labelX, chaosFilterButton.getY(),
-                                               juce::jmax (0, labelR - labelX), cachedVLayout_.box);
-        if (chsFArea.contains (p) || chaosFilterDisplay.getBounds().contains (p))
+        if (getChaosFilterLabelArea().contains (p) || chaosFilterDisplay.getBounds().contains (p))
         {
             if (e.mods.isPopupMenu())
                 openChaosFilterPrompt();
@@ -5163,13 +5181,7 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     // CHSD label click → toggle (left), config (right)
     if (chaosDelayButton.isVisible())
     {
-        const int boxSide = juce::jlimit (14, juce::jmax (14, cachedVLayout_.box - 2),
-                                          (int) std::lround ((double) cachedVLayout_.box * 0.65));
-        const int labelX = chaosDelayButton.getX() + boxSide + 4 + 2;
-        const int labelR = getWidth() - 6;
-        auto chsDArea = juce::Rectangle<int> (labelX, chaosDelayButton.getY(),
-                                               juce::jmax (0, labelR - labelX), cachedVLayout_.box);
-        if (chsDArea.contains (p) || chaosDelayDisplay.getBounds().contains (p))
+        if (getChaosDelayLabelArea().contains (p) || chaosDelayDisplay.getBounds().contains (p))
         {
             if (e.mods.isPopupMenu())
                 openChaosDelayPrompt();
@@ -5630,9 +5642,9 @@ void DisperserAudioProcessorEditor::resized()
         const int chaosLeftW  = chaosRightX - horizontalLayout.leftX;
         const int chaosRightW = horizontalLayout.leftX + horizontalLayout.contentW - chaosRightX;
         chaosFilterButton.setBounds  (horizontalLayout.leftX, chaosY, chaosLeftW,  chaosH);
-        chaosFilterDisplay.setBounds (horizontalLayout.leftX, chaosY, chaosLeftW,  chaosH);
         chaosDelayButton.setBounds   (chaosRightX,            chaosY, chaosRightW, chaosH);
-        chaosDelayDisplay.setBounds  (chaosRightX,            chaosY, chaosRightW, chaosH);
+        chaosFilterDisplay.setBounds (getChaosFilterLabelArea());
+        chaosDelayDisplay.setBounds  (getChaosDelayLabelArea());
 
         modeInCombo.setVisible (true);
         modeOutCombo.setVisible (true);
