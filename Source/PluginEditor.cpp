@@ -3174,6 +3174,7 @@ void DisperserAudioProcessorEditor::openMidiChannelPrompt()
             const juce::String text (delayValue);
             if (delayTe->getText() != text)
                 delayTe->setText (text, juce::dontSendNotification);
+            delayTe->selectAll();
             applyLiveMidiDelay (delayValue);
             if (layoutRows) layoutRows();
         };
