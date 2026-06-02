@@ -318,3 +318,4 @@ Current v1.4 state includes:
 - IO routing section with `MODE IN`, `MODE OUT`, `SUM BUS`, `MIX MODE`, `FILTER POS`, `INV POL`, and `INV STR`
 - dual-stage transparent peak limiter with `WET` and `GLOBAL` placement options
 - smoothed live control handling for core continuous parameters and utility gains
+- `0-100 ms` MIDI delay prompt plus refined Hz/kHz filter-frequency entry
