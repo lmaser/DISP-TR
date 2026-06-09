@@ -2562,13 +2562,13 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     aw->addAndMakeVisible (lpBar);
 
     // HP on/off toggle
-    auto* hpToggle = new juce::ToggleButton ("");
+    auto* hpToggle = new MainGuiPromptToggleButton ("");
     hpToggle->setToggleState (hpOn, juce::dontSendNotification);
     hpToggle->setLookAndFeel (&lnf);
     aw->addAndMakeVisible (hpToggle);
 
     // LP on/off toggle
-    auto* lpToggle = new juce::ToggleButton ("");
+    auto* lpToggle = new MainGuiPromptToggleButton ("");
     lpToggle->setToggleState (lpOn, juce::dontSendNotification);
     lpToggle->setLookAndFeel (&lnf);
     aw->addAndMakeVisible (lpToggle);
@@ -2715,8 +2715,10 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
         std::function<juce::String (int)> toText;
         std::function<void()> push;
         std::shared_ptr<std::function<void()>> layout;
-        void mouseDown (const juce::MouseEvent&) override
+        void mouseDown (const juce::MouseEvent& e) override
         {
+            if (e.mods.isPopupMenu())
+                return;
             *val = (*val + 1) % 3;
             label->setText (toText (*val), juce::dontSendNotification);
             push();
@@ -2811,9 +2813,9 @@ void DisperserAudioProcessorEditor::openFilterPrompt()
     struct ToggleForwarder : public juce::MouseListener
     {
         juce::ToggleButton* toggle = nullptr;
-        void mouseDown (const juce::MouseEvent&) override
+        void mouseDown (const juce::MouseEvent& e) override
         {
-            if (toggle != nullptr)
+            if (! e.mods.isPopupMenu() && toggle != nullptr)
                 toggle->setToggleState (! toggle->getToggleState(), juce::sendNotification);
         }
     };
@@ -4246,13 +4248,13 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
         return label;
     };
 
-    auto* defaultToggle = new juce::ToggleButton ("");
+    auto* defaultToggle = new MainGuiPromptToggleButton ("");
     defaultToggle->setComponentID ("paletteDefaultToggle");
     aw->addAndMakeVisible (defaultToggle);
 
     auto* defaultLabel = addPopupLabel ("paletteDefaultLabel", "DFLT", labelFont);
 
-    auto* customToggle = new juce::ToggleButton ("");
+    auto* customToggle = new MainGuiPromptToggleButton ("");
     customToggle->setComponentID ("paletteCustomToggle");
     aw->addAndMakeVisible (customToggle);
 
@@ -4275,7 +4277,7 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
         aw->addAndMakeVisible (custom);
     }
 
-    auto* fxToggle = new juce::ToggleButton ("");
+    auto* fxToggle = new MainGuiPromptToggleButton ("");
     fxToggle->setComponentID ("fxToggle");
     fxToggle->setToggleState (crtEnabled, juce::dontSendNotification);
     fxToggle->onClick = [safeThis, fxToggle]()
@@ -5253,7 +5255,8 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 
     if (altButton.isVisible() && getAltLabelArea().contains (p))
     {
-        altButton.setToggleState (! altButton.getToggleState(), juce::sendNotificationSync);
+        if (! e.mods.isPopupMenu())
+            altButton.setToggleState (! altButton.getToggleState(), juce::sendNotificationSync);
         return;
     }
 

@@ -248,7 +248,7 @@ private:
 
     DualMixBarComponent dualMixBar_;
 
-    juce::ToggleButton altButton;
+    MainGuiPromptToggleButton altButton;
     MainGuiPromptToggleButton midiButton;
     juce::Label midiChannelDisplay;
 
