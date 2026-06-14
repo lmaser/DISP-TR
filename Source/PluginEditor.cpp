@@ -104,6 +104,23 @@ static juce::String formatChaosTooltip (float amountPercent, float speedHz)
          + " Hz";
 }
 
+static juce::String formatSidechainToneText (float hz)
+{
+    const float clamped = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                        DisperserAudioProcessor::kSidechainToneMax, hz);
+    return clamped >= 1000.0f ? juce::String (clamped / 1000.0f, 1) + " kHz"
+                              : juce::String (juce::roundToInt (clamped)) + " Hz";
+}
+
+static juce::String formatSidechainTooltip (float smooth, float tone)
+{
+    return "SMOOTH "
+         + juce::String (juce::roundToInt (juce::jlimit (DisperserAudioProcessor::kSidechainSmoothMin,
+                                                        DisperserAudioProcessor::kSidechainSmoothMax,
+                                                        smooth) * 100.0f))
+         + "% | TONE " + formatSidechainToneText (tone);
+}
+
 //========================== LookAndFeel ==========================
 
 void DisperserAudioProcessorEditor::MinimalLNF::drawLinearSlider (juce::Graphics& g,
@@ -961,9 +978,12 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     altButton.setButtonText ("");
     midiButton.setButtonText ("");
+    sidechainButton.setButtonText ("");
 
     addAndMakeVisible (altButton);
     addAndMakeVisible (midiButton);
+    addAndMakeVisible (sidechainButton);
+    sidechainButton.setVisible (false);
 
     // MIDI channel tooltip overlay — invisible label positioned over the MIDI legend.
     // Provides tooltip on hover; clicks forwarded to editor via addMouseListener.
@@ -977,6 +997,20 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
         midiChannelDisplay.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
         midiChannelDisplay.setOpaque (false);
         addAndMakeVisible (midiChannelDisplay);
+    }
+
+    {
+        const float savedSmooth = audioProcessor.apvts.getRawParameterValue (DisperserAudioProcessor::kParamSidechainSmooth)->load();
+        const float savedTone = audioProcessor.apvts.getRawParameterValue (DisperserAudioProcessor::kParamSidechainTone)->load();
+        sidechainDisplay.setText ("", juce::dontSendNotification);
+        sidechainDisplay.setInterceptsMouseClicks (true, false);
+        sidechainDisplay.addMouseListener (this, false);
+        sidechainDisplay.setTooltip (formatSidechainTooltip (savedSmooth, savedTone));
+        sidechainDisplay.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+        sidechainDisplay.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+        sidechainDisplay.setOpaque (false);
+        addAndMakeVisible (sidechainDisplay);
+        sidechainDisplay.setVisible (false);
     }
 
     auto bindSlider = [&] (std::unique_ptr<SliderAttachment>& attachment,
@@ -1012,6 +1046,7 @@ DisperserAudioProcessorEditor::DisperserAudioProcessorEditor (DisperserAudioProc
 
     bindButton (altAttachment, DisperserAudioProcessor::kParamAlt, altButton);
     bindButton (midiAttachment, DisperserAudioProcessor::kParamMidi, midiButton);
+    bindButton (sidechainAttachment, DisperserAudioProcessor::kParamSidechain, sidechainButton);
     bindButton (chaosFilterAttachment, DisperserAudioProcessor::kParamChaos, chaosFilterButton);
     bindButton (chaosDelayAttachment,  DisperserAudioProcessor::kParamChaosD, chaosDelayButton);
 
@@ -3774,6 +3809,405 @@ void DisperserAudioProcessorEditor::openChaosDelayPrompt()
                            "CHSD");
 }
 
+void DisperserAudioProcessorEditor::openSidechainPrompt()
+{
+    lnf.setScheme (activeScheme);
+    const auto scheme = activeScheme;
+
+    const float currentSmooth = juce::jlimit (DisperserAudioProcessor::kSidechainSmoothMin,
+                                             DisperserAudioProcessor::kSidechainSmoothMax,
+                                             audioProcessor.apvts.getRawParameterValue (
+                                                 DisperserAudioProcessor::kParamSidechainSmooth)->load());
+    const float currentTone = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                           DisperserAudioProcessor::kSidechainToneMax,
+                                           audioProcessor.apvts.getRawParameterValue (
+                                               DisperserAudioProcessor::kParamSidechainTone)->load());
+
+    auto* aw = new juce::AlertWindow ("", "", juce::AlertWindow::NoIcon);
+    aw->setLookAndFeel (&lnf);
+    aw->addTextEditor ("smooth", juce::String (juce::roundToInt (currentSmooth * 100.0f)), juce::String());
+    aw->addTextEditor ("tone", juce::String (juce::roundToInt (currentTone)), juce::String());
+
+    struct PromptBar : public juce::Component
+    {
+        DISPScheme colours;
+        float value01 = 0.0f;
+        float default01 = 0.0f;
+        std::function<void (float)> onValueChanged;
+
+        PromptBar (const DISPScheme& s, float initial01, float def01)
+            : colours (s),
+              value01 (juce::jlimit (0.0f, 1.0f, initial01)),
+              default01 (juce::jlimit (0.0f, 1.0f, def01)) {}
+
+        void paint (juce::Graphics& g) override
+        {
+            const auto r = getLocalBounds().toFloat();
+            g.setColour (colours.outline);
+            g.drawRect (r, 4.0f);
+
+            auto inner = r.reduced (7.0f);
+            g.setColour (colours.bg);
+            g.fillRect (inner);
+            g.setColour (colours.fg);
+            g.fillRect (inner.withWidth (inner.getWidth() * value01));
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override { updateFromMouse (e); }
+        void mouseDrag (const juce::MouseEvent& e) override { updateFromMouse (e); }
+        void mouseDoubleClick (const juce::MouseEvent&) override { setValue (default01); }
+
+        void setValue (float next)
+        {
+            value01 = juce::jlimit (0.0f, 1.0f, next);
+            repaint();
+            if (onValueChanged)
+                onValueChanged (value01);
+        }
+
+    private:
+        void updateFromMouse (const juce::MouseEvent& e)
+        {
+            const float innerW = (float) getWidth() - 14.0f;
+            setValue (innerW > 0.0f ? ((float) e.x - 7.0f) / innerW : 0.0f);
+        }
+    };
+
+    struct UnitInputFilter : juce::TextEditor::InputFilter
+    {
+        float maxValue = 1.0f;
+        int maxLength = 4;
+        bool allowDecimal = true;
+
+        UnitInputFilter (float maxVal, int maxLen, bool decimal)
+            : maxValue (maxVal), maxLength (maxLen), allowDecimal (decimal) {}
+
+        juce::String filterNewText (juce::TextEditor& editor, const juce::String& newText) override
+        {
+            const bool existingHasDot = editor.getText().containsChar ('.');
+            bool seenDot = false;
+            juce::String result;
+
+            for (auto c : newText)
+            {
+                if (c == '.')
+                {
+                    if (! allowDecimal || seenDot || existingHasDot)
+                        continue;
+                    seenDot = true;
+                    result += c;
+                }
+                else if (juce::CharacterFunctions::isDigit (c))
+                {
+                    result += c;
+                }
+
+                if (result.length() >= maxLength)
+                    break;
+            }
+
+            juce::String proposed = editor.getText();
+            const int insertPos = editor.getCaretPosition();
+            proposed = proposed.substring (0, insertPos) + result
+                     + proposed.substring (insertPos + editor.getHighlightedText().length());
+
+            if (proposed.length() > maxLength || proposed.getFloatValue() > maxValue)
+                return {};
+
+            if (allowDecimal && proposed.length() > 1 && proposed[0] == '0' && proposed[1] != '.')
+                return {};
+
+            return result;
+        }
+    };
+
+    const auto& f = kBoldFont40();
+    auto makeLabel = [&] (const juce::String& name, const juce::String& text)
+    {
+        auto* l = new juce::Label (name, text);
+        l->setJustificationType (juce::Justification::centredLeft);
+        applyLabelTextColour (*l, scheme.text);
+        l->setBorderSize (juce::BorderSize<int> (0));
+        l->setFont (f);
+        aw->addAndMakeVisible (l);
+        return l;
+    };
+
+    auto* smoothLabel = makeLabel ("sc_smooth_label", "SMOOTH");
+    auto* toneLabel = makeLabel ("sc_tone_label", "TONE");
+    auto* smoothUnit = makeLabel ("sc_smooth_unit", "%");
+    auto* toneUnit = makeLabel ("sc_tone_unit", "Hz");
+
+    auto formatToneValue = [] (float hz)
+    {
+        const float clamped = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                            DisperserAudioProcessor::kSidechainToneMax, hz);
+        return clamped >= 1000.0f ? juce::String (clamped / 1000.0f, 1)
+                                  : juce::String (juce::roundToInt (clamped));
+    };
+
+    auto updateTonePresentation = [aw, toneUnit, formatToneValue] (float toneHz, bool rewriteText)
+    {
+        const float clamped = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                            DisperserAudioProcessor::kSidechainToneMax, toneHz);
+        const bool useKhz = clamped >= 1000.0f;
+        toneUnit->setText (useKhz ? "kHz" : "Hz", juce::dontSendNotification);
+
+        if (auto* te = aw->getTextEditor ("tone"))
+        {
+            te->setInputFilter (new UnitInputFilter (useKhz ? 20.0f : DisperserAudioProcessor::kSidechainToneMax,
+                                                     useKhz ? 4 : 5,
+                                                     useKhz),
+                               true);
+            if (rewriteText)
+                te->setText (formatToneValue (clamped), juce::dontSendNotification);
+        }
+    };
+
+    const float toneLogMin = std::log (DisperserAudioProcessor::kSidechainToneMin);
+    const float toneLogRange = std::log (DisperserAudioProcessor::kSidechainToneMax) - toneLogMin;
+    auto toneToBar = [toneLogMin, toneLogRange] (float hz)
+    {
+        const float clamped = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                            DisperserAudioProcessor::kSidechainToneMax, hz);
+        return (std::log (clamped) - toneLogMin) / toneLogRange;
+    };
+    auto barToTone = [toneLogMin, toneLogRange] (float value01)
+    {
+        return std::exp (toneLogMin + juce::jlimit (0.0f, 1.0f, value01) * toneLogRange);
+    };
+
+    auto* smoothBar = new PromptBar (scheme, currentSmooth, DisperserAudioProcessor::kSidechainSmoothDefault);
+    auto* toneBar = new PromptBar (scheme, toneToBar (currentTone), toneToBar (DisperserAudioProcessor::kSidechainToneDefault));
+    aw->addAndMakeVisible (smoothBar);
+    aw->addAndMakeVisible (toneBar);
+
+    if (auto* te = aw->getTextEditor ("smooth"))
+    {
+        te->setFont (f);
+        te->applyFontToAllText (f);
+        te->setInputFilter (new UnitInputFilter (100.0f, 3, false), true);
+    }
+    if (auto* te = aw->getTextEditor ("tone"))
+    {
+        te->setFont (f);
+        te->applyFontToAllText (f);
+        updateTonePresentation (currentTone, true);
+    }
+
+    auto syncing = std::make_shared<bool> (false);
+    juce::Component::SafePointer<DisperserAudioProcessorEditor> safeThis (this);
+
+    auto setSidechainParam = [safeThis] (const char* paramId, float plainValue)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (auto* p = safeThis->audioProcessor.apvts.getParameter (paramId))
+            p->setValueNotifyingHost (p->convertTo0to1 (plainValue));
+    };
+
+    auto pushValues = [safeThis, setSidechainParam] (float smooth, float tone)
+    {
+        const float clampedSmooth = juce::jlimit (DisperserAudioProcessor::kSidechainSmoothMin,
+                                                 DisperserAudioProcessor::kSidechainSmoothMax, smooth);
+        const float clampedTone = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                               DisperserAudioProcessor::kSidechainToneMax, tone);
+
+        setSidechainParam (DisperserAudioProcessor::kParamSidechainSmooth, clampedSmooth);
+        setSidechainParam (DisperserAudioProcessor::kParamSidechainTone, clampedTone);
+
+        if (safeThis != nullptr)
+            safeThis->sidechainDisplay.setTooltip (formatSidechainTooltip (clampedSmooth, clampedTone));
+    };
+
+    auto layoutRows = [aw, smoothLabel, toneLabel, smoothUnit, toneUnit, smoothBar, toneBar]()
+    {
+        auto* smoothTe = aw->getTextEditor ("smooth");
+        auto* toneTe = aw->getTextEditor ("tone");
+        if (smoothTe == nullptr || toneTe == nullptr)
+            return;
+
+        const int buttonsTop = getAlertButtonsTop (*aw);
+        const int rowH = (int) (smoothTe->getFont().getHeight() * kPromptEditorHeightScale) + kPromptEditorHeightPadPx;
+        const int barH = juce::jmax (12, rowH / 2);
+        const int barGap = juce::jmax (4, rowH / 4);
+        const int rowTotal = rowH + barGap + barH;
+        const int rowGap = juce::jmax (4, rowH / 3);
+        const int rowY = juce::jmax (kPromptEditorMinTopPx, (buttonsTop - (rowTotal * 2 + rowGap)) / 2);
+        const int barX = kPromptInnerMargin;
+        const int barW = aw->getWidth() - kPromptInnerMargin * 2;
+
+        auto placeRow = [&] (juce::TextEditor* te, juce::Label* label, juce::Label* unit,
+                             PromptBar* bar, int y, bool toneRow)
+        {
+            const int labelW = stringWidth (label->getFont(), label->getText()) + 2;
+            const int textW = juce::jmax (1, stringWidth (te->getFont(), te->getText()));
+            const int worstTextW = stringWidth (te->getFont(), toneRow
+                ? (unit->getText() == "kHz" ? "20.0" : "999")
+                : "100");
+            const int unitW = toneRow ? stringWidth (unit->getFont(), "kHz") + 4
+                                      : stringWidth (unit->getFont(), unit->getText()) + 2;
+            const int valueTextW = textW + 8;
+            const int editorW = toneRow
+                ? juce::jmax (24, juce::jmax (valueTextW, worstTextW) + 8)
+                : juce::jlimit (24, 88, valueTextW + 28);
+            const int labelGap = toneRow ? 20 : juce::jmax (2, stringWidth (te->getFont(), " "));
+            const int unitGap = toneRow ? 2 : 0;
+            const int visualW = labelW + labelGap + editorW + unitGap + unitW;
+            const int blockLeft = barX + juce::jmax (0, (barW - visualW) / 2);
+
+            label->setBounds (blockLeft, y, labelW, rowH);
+            te->setBounds (blockLeft + labelW + labelGap, y, editorW, rowH);
+
+            if (toneRow)
+            {
+                unit->setBounds (te->getRight() + unitGap, y, unitW, rowH);
+            }
+            else
+            {
+                const int textRightX = te->getX() + ((editorW - textW) / 2) + textW;
+                unit->setBounds (textRightX, y, unitW, rowH);
+            }
+
+            bar->setBounds (barX, y + rowH + barGap, barW, barH);
+        };
+
+        placeRow (smoothTe, smoothLabel, smoothUnit, smoothBar, rowY, false);
+        placeRow (toneTe, toneLabel, toneUnit, toneBar, rowY + rowTotal + rowGap, true);
+    };
+
+    smoothBar->onValueChanged = [aw, toneBar, syncing, layoutRows, pushValues, barToTone] (float value01)
+    {
+        if (*syncing)
+            return;
+        *syncing = true;
+        if (auto* te = aw->getTextEditor ("smooth"))
+        {
+            te->setText (juce::String (juce::roundToInt (value01 * 100.0f)), juce::sendNotification);
+            te->selectAll();
+        }
+        *syncing = false;
+        pushValues (value01, barToTone (toneBar->value01));
+        layoutRows();
+    };
+
+    toneBar->onValueChanged = [aw, smoothBar, syncing, layoutRows, pushValues, barToTone, updateTonePresentation] (float value01)
+    {
+        if (*syncing)
+            return;
+        *syncing = true;
+        const float toneHz = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                           DisperserAudioProcessor::kSidechainToneMax,
+                                           barToTone (value01));
+        updateTonePresentation (toneHz, true);
+        if (auto* te = aw->getTextEditor ("tone"))
+            te->selectAll();
+        *syncing = false;
+        pushValues (smoothBar->value01, toneHz);
+        layoutRows();
+    };
+
+    if (auto* te = aw->getTextEditor ("smooth"))
+        te->onTextChange = [aw, smoothBar, toneBar, syncing, layoutRows, pushValues, barToTone]()
+        {
+            if (*syncing)
+                return;
+            *syncing = true;
+            float nextSmooth = DisperserAudioProcessor::kSidechainSmoothMin;
+            if (auto* editor = aw->getTextEditor ("smooth"))
+                nextSmooth = juce::jlimit (DisperserAudioProcessor::kSidechainSmoothMin,
+                                           DisperserAudioProcessor::kSidechainSmoothMax,
+                                           editor->getText().getFloatValue() * 0.01f);
+            smoothBar->setValue (nextSmooth);
+            *syncing = false;
+            pushValues (nextSmooth, barToTone (toneBar->value01));
+            layoutRows();
+        };
+
+    if (auto* te = aw->getTextEditor ("tone"))
+        te->onTextChange = [aw, smoothBar, toneBar, toneUnit, syncing, layoutRows, pushValues, toneToBar, updateTonePresentation]()
+        {
+            if (*syncing)
+                return;
+            *syncing = true;
+            float nextTone = DisperserAudioProcessor::kSidechainToneMin;
+            if (auto* editor = aw->getTextEditor ("tone"))
+            {
+                const bool useKhz = (toneUnit != nullptr && toneUnit->getText() == "kHz");
+                nextTone = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                         DisperserAudioProcessor::kSidechainToneMax,
+                                         editor->getText().getFloatValue() * (useKhz ? 1000.0f : 1.0f));
+                updateTonePresentation (nextTone, true);
+            }
+            toneBar->setValue (toneToBar (nextTone));
+            *syncing = false;
+            pushValues (smoothBar->value01, nextTone);
+            layoutRows();
+        };
+
+    aw->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    aw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    applyPromptShellSize (*aw);
+    layoutAlertWindowButtons (*aw);
+    preparePromptTextEditor (*aw, "smooth", scheme.bg, scheme.text, scheme.fg, f, false);
+    preparePromptTextEditor (*aw, "tone", scheme.bg, scheme.text, scheme.fg, f, false);
+    layoutRows();
+    styleAlertButtons (*aw, lnf);
+
+    setPromptOverlayActive (true);
+
+    if (safeThis != nullptr)
+    {
+        fitAlertWindowToEditor (*aw, safeThis.getComponent(), [layoutRows] (juce::AlertWindow& a)
+        {
+            layoutAlertWindowButtons (a);
+            layoutRows();
+        });
+        embedAlertWindowInOverlay (safeThis.getComponent(), aw);
+    }
+    else
+    {
+        aw->centreAroundComponent (this, aw->getWidth(), aw->getHeight());
+        bringPromptWindowToFront (*aw);
+    }
+
+    aw->enterModalState (true,
+        juce::ModalCallbackFunction::create (
+            [safeThis, aw, savedSmooth = currentSmooth, savedTone = currentTone] (int result) mutable
+        {
+            std::unique_ptr<juce::AlertWindow> killer (aw);
+
+            if (safeThis != nullptr)
+                safeThis->setPromptOverlayActive (false);
+
+            if (safeThis == nullptr)
+                return;
+
+            if (result != 1)
+            {
+                if (auto* p = safeThis->audioProcessor.apvts.getParameter (DisperserAudioProcessor::kParamSidechainSmooth))
+                    p->setValueNotifyingHost (p->convertTo0to1 (savedSmooth));
+                if (auto* p = safeThis->audioProcessor.apvts.getParameter (DisperserAudioProcessor::kParamSidechainTone))
+                    p->setValueNotifyingHost (p->convertTo0to1 (savedTone));
+                safeThis->sidechainDisplay.setTooltip (formatSidechainTooltip (savedSmooth, savedTone));
+                return;
+            }
+
+            const float newSmooth = juce::jlimit (DisperserAudioProcessor::kSidechainSmoothMin,
+                                                 DisperserAudioProcessor::kSidechainSmoothMax,
+                                                 safeThis->audioProcessor.apvts.getRawParameterValue (
+                                                     DisperserAudioProcessor::kParamSidechainSmooth)->load());
+            const float newTone = juce::jlimit (DisperserAudioProcessor::kSidechainToneMin,
+                                               DisperserAudioProcessor::kSidechainToneMax,
+                                               safeThis->audioProcessor.apvts.getRawParameterValue (
+                                                   DisperserAudioProcessor::kParamSidechainTone)->load());
+
+            safeThis->sidechainDisplay.setTooltip (formatSidechainTooltip (newSmooth, newTone));
+        }),
+        false);
+}
+
 void DisperserAudioProcessorEditor::openMixSendPrompt()
 {
     using namespace TR;
@@ -4849,15 +5283,16 @@ DisperserAudioProcessorEditor::buildVerticalLayout (int editorH, int biasY, bool
 
     // When expanded, buttons are hidden — chaos sits at the very bottom row.
     // When collapsed, buttons occupy btnY and chaos is hidden.
-    m.chaosRowY = ioExpanded ? (editorH - m.bottomMargin - m.box) : 0;
+    m.sidechainRowY = ioExpanded ? (editorH - m.bottomMargin - m.box) : 0;
+    m.chaosRowY = ioExpanded ? (m.sidechainRowY - m.box - m.btnRowGap) : 0;
 
     const int sliderBottomRef = ioExpanded ? m.chaosRowY : m.btnY;
     m.availableForSliders = juce::jmax (40, sliderBottomRef - m.betweenSlidersAndButtons - m.topMargin);
 
     // Bars below toggle: use the same compact-menu vertical density as FREQ-TR.
     // Toggle bar stays fixed — only bar/gap sizing adapts to the visible count.
-    const int numSliders = ioExpanded ? 10 : 8;
-    const int numGaps    = ioExpanded ? 10 : 8;  // (N-1) inter-slider + 1 toggle-to-first
+    const int numSliders = ioExpanded ? 11 : 8;
+    const int numGaps    = ioExpanded ? 11 : 8;  // (N-1) inter-slider + 1 toggle-to-first
 
     m.toggleBarH = 20;  // fixed visual height for click area
     const int spaceForScale = juce::jmax (40, m.availableForSliders - m.toggleBarH);
@@ -5180,6 +5615,11 @@ juce::Rectangle<int> DisperserAudioProcessorEditor::getMidiLabelArea() const
     return makeToggleLabelArea (midiButton, getWidth() - kToggleLegendCollisionPadPx, "MIDI", "MIDI");
 }
 
+juce::Rectangle<int> DisperserAudioProcessorEditor::getSidechainLabelArea() const
+{
+    return makeToggleLabelArea (sidechainButton, getWidth() - kToggleLegendCollisionPadPx, "SIDECHAIN", "SC");
+}
+
 juce::Rectangle<int> DisperserAudioProcessorEditor::getChaosFilterLabelArea() const
 {
     if (chaosFilterButton.getWidth() <= 0 || chaosFilterButton.getHeight() <= 0)
@@ -5267,6 +5707,15 @@ void DisperserAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
             openMidiChannelPrompt();
         else
             midiButton.setToggleState (! midiButton.getToggleState(), juce::sendNotificationSync);
+        return;
+    }
+
+    if (sidechainButton.isVisible() && (getSidechainLabelArea().contains (p) || sidechainDisplay.getBounds().contains (p)))
+    {
+        if (e.mods.isPopupMenu())
+            openSidechainPrompt();
+        else
+            sidechainButton.setToggleState (! sidechainButton.getToggleState(), juce::sendNotificationSync);
         return;
     }
 
@@ -5609,6 +6058,17 @@ void DisperserAudioProcessorEditor::paint (juce::Graphics& g)
             drawChaosToggleLabel (chaosFilterButton, "CHSF", chsFCR);
             drawChaosToggleLabel (chaosDelayButton,  "CHSD", chsDCR);
         }
+
+        if (sidechainButton.isVisible())
+        {
+            g.setFont (kBoldFont40());
+            const auto scArea = getSidechainLabelArea();
+            const juce::String scLabel = chooseToggleLabel (sidechainButton,
+                                                            W - kToggleLegendCollisionPadPx,
+                                                            "SIDECHAIN", "SC");
+            if (scArea.getWidth() > 0)
+                g.drawText (scLabel, scArea, juce::Justification::left, true);
+        }
     }
     g.setColour (scheme.text);
 
@@ -5746,10 +6206,16 @@ void DisperserAudioProcessorEditor::resized()
         const int chaosRightX = horizontalLayout.leftX + horizontalLayout.barW + horizontalLayout.valuePad;
         const int chaosLeftW  = chaosRightX - horizontalLayout.leftX;
         const int chaosRightW = horizontalLayout.leftX + horizontalLayout.contentW - chaosRightX;
+        const int sidechainToggleVisualSide = juce::jlimit (14,
+                                                            juce::jmax (14, verticalLayout.box - 2),
+                                                            (int) std::lround ((double) verticalLayout.box * 0.65));
+        const int sidechainToggleHitW = sidechainToggleVisualSide + 6;
         chaosFilterButton.setBounds  (horizontalLayout.leftX, chaosY, chaosLeftW,  chaosH);
         chaosDelayButton.setBounds   (chaosRightX,            chaosY, chaosRightW, chaosH);
         chaosFilterDisplay.setBounds (getChaosFilterLabelArea());
         chaosDelayDisplay.setBounds  (getChaosDelayLabelArea());
+        sidechainButton.setBounds (horizontalLayout.leftX, verticalLayout.sidechainRowY, sidechainToggleHitW, verticalLayout.box);
+        sidechainDisplay.setBounds (getSidechainLabelArea());
 
         modeInCombo.setVisible (true);
         modeOutCombo.setVisible (true);
@@ -5768,6 +6234,8 @@ void DisperserAudioProcessorEditor::resized()
         chaosFilterDisplay.setVisible (true);
         chaosDelayButton.setVisible (true);
         chaosDelayDisplay.setVisible (true);
+        sidechainButton.setVisible (true);
+        sidechainDisplay.setVisible (true);
 
         altButton.setVisible (false);
         midiButton.setVisible (false);
@@ -5834,6 +6302,8 @@ void DisperserAudioProcessorEditor::resized()
         chaosFilterDisplay.setVisible (false);
         chaosDelayButton.setVisible (false);
         chaosDelayDisplay.setVisible (false);
+        sidechainButton.setVisible (false);
+        sidechainDisplay.setVisible (false);
         modeInCombo.setVisible (false);
         modeOutCombo.setVisible (false);
         sumBusCombo.setVisible (false);

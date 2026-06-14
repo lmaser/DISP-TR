@@ -27,6 +27,9 @@ public:
 	static constexpr const char* kParamPan       = "pan";
 	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
+	static constexpr const char* kParamSidechain = "sidechain";
+	static constexpr const char* kParamSidechainSmooth = "sidechain_smooth";
+	static constexpr const char* kParamSidechainTone = "sidechain_tone";
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
 
@@ -123,6 +126,13 @@ public:
 	static constexpr int kStyleMin     = 0;
 	static constexpr int kStyleMax     = 3;         // 0 = MONO, 1 = STEREO, 2 = WIDE, 3 = DUAL
 	static constexpr float kStyleDefault = 1.0f;    // STEREO by default
+	static constexpr float kSidechainSmoothMin     = 0.0f;
+	static constexpr float kSidechainSmoothMax     = 1.0f;
+	static constexpr float kSidechainSmoothDefault = 0.25f;
+	static constexpr float kSidechainToneMin       = 250.0f;
+	static constexpr float kSidechainToneMax       = 20000.0f;
+	static constexpr float kSidechainToneDefault   = 5000.0f;
+	static constexpr float kSidechainFrequencyOffsetMaxHz = 5000.0f;
 
 	static constexpr float kFilterFreqMin     = 20.0f;
 	static constexpr float kFilterFreqMax     = 20000.0f;
@@ -349,8 +359,14 @@ private:
 	// Feedback
 	juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> feedbackSmoothed;
 	static constexpr double kFeedbackSmoothingSeconds = 0.05;
+	static constexpr float kFbkDcBlockHz = 5.0f;
 	float feedbackLastL = 0.0f;
 	float feedbackLastR = 0.0f;
+	float fbkDcStateInL = 0.0f;
+	float fbkDcStateInR = 0.0f;
+	float fbkDcStateOutL = 0.0f;
+	float fbkDcStateOutR = 0.0f;
+	float fbkDcCoeff = 0.999f;
 
 	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainL;
 	std::array<std::vector<AllPassState>, kSeriesMax> xfadeChainR;
@@ -378,6 +394,7 @@ private:
 	void clearPendingMidiEvents() noexcept;
 	void enqueuePendingMidiEvent (const PendingMidiEvent& event) noexcept;
 	void applyPendingMidiEvent (const PendingMidiEvent& event) noexcept;
+	void resetSidechainRuntime() noexcept;
 
 	static constexpr int kPendingMidiEventCapacity = 256;
 	std::atomic<float> currentMidiFrequency { 0.0f };
@@ -387,6 +404,33 @@ private:
 	std::atomic<int>   midiDelayMs { 0 };
 	std::array<PendingMidiEvent, kPendingMidiEventCapacity> pendingMidiEvents_ {};
 	int pendingMidiEventCount_ = 0;
+
+	std::vector<float> sidechainFrequencyOffsetNorm_;
+	float sidechainDcPrevInL_ = 0.0f;
+	float sidechainDcPrevInR_ = 0.0f;
+	float sidechainDcPrevOutL_ = 0.0f;
+	float sidechainDcPrevOutR_ = 0.0f;
+	struct SidechainToneFilterState
+	{
+		float oneX1 = 0.0f;
+		float oneY1 = 0.0f;
+		float biquadX1 = 0.0f;
+		float biquadX2 = 0.0f;
+		float biquadY1 = 0.0f;
+		float biquadY2 = 0.0f;
+
+		void reset() noexcept
+		{
+			oneX1 = oneY1 = biquadX1 = biquadX2 = biquadY1 = biquadY2 = 0.0f;
+		}
+	};
+	SidechainToneFilterState sidechainToneFilterL_;
+	SidechainToneFilterState sidechainToneFilterR_;
+	float sidechainCarrierSmoothL_ = 0.0f;
+	float sidechainCarrierSmoothR_ = 0.0f;
+	float sidechainRmsEnv_ = 0.0f;
+	float sidechainGateSmoothed_ = 0.0f;
+	float sidechainDepthSmoothed_ = 0.0f;
 
 	double currentSampleRate = 44100.0;
 
@@ -453,6 +497,9 @@ private:
 	std::atomic<float>* tiltParam = nullptr;
 	std::atomic<float>* styleParam = nullptr;
 	std::atomic<float>* midiParam = nullptr;
+	std::atomic<float>* sidechainParam = nullptr;
+	std::atomic<float>* sidechainSmoothParam = nullptr;
+	std::atomic<float>* sidechainToneParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
 	std::atomic<float>* filterHpFreqParam  = nullptr;

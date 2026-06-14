@@ -34,6 +34,7 @@ private:
     void openChaosConfigPrompt (const char* amtParamId, const char* spdParamId, const juce::String& title);
     void openChaosFilterPrompt();
     void openChaosDelayPrompt();
+    void openSidechainPrompt();
     void openMixSendPrompt();
     void setPromptOverlayActive (bool shouldBeActive);
 
@@ -251,6 +252,8 @@ private:
     MainGuiPromptToggleButton altButton;
     MainGuiPromptToggleButton midiButton;
     juce::Label midiChannelDisplay;
+    MainGuiPromptToggleButton sidechainButton;
+    juce::Label sidechainDisplay;
 
     // Chaos buttons
     MainGuiPromptToggleButton chaosFilterButton;
@@ -289,6 +292,7 @@ private:
 
     std::unique_ptr<ButtonAttachment> altAttachment;
     std::unique_ptr<ButtonAttachment> midiAttachment;
+    std::unique_ptr<ButtonAttachment> sidechainAttachment;
     std::unique_ptr<ButtonAttachment> chaosFilterAttachment;
     std::unique_ptr<ButtonAttachment> chaosDelayAttachment;
 
@@ -327,6 +331,7 @@ private:
         int box = 0;
         int btnRowGap = 0;
         int chaosRowY = 0;
+        int sidechainRowY = 0;
         int btnY = 0;
         int availableForSliders = 0;
         int barH = 0;
@@ -486,6 +491,7 @@ private:
     juce::Slider* getSliderForValueAreaPoint (juce::Point<int> p);
     juce::Rectangle<int> getAltLabelArea() const;
     juce::Rectangle<int> getMidiLabelArea() const;
+    juce::Rectangle<int> getSidechainLabelArea() const;
     juce::Rectangle<int> getChaosFilterLabelArea() const;
     juce::Rectangle<int> getChaosDelayLabelArea() const;
     juce::Rectangle<int> getInfoIconArea() const;
