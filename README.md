@@ -27,7 +27,7 @@ The core idea is:
 DISP-TR uses the TR-series text UI with horizontal bar sliders, direct labels, and numeric popup entry.
 
 - **Bar sliders**: Click and drag horizontally. Right-click the value area for numeric entry when available.
-- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FBK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT` and `MIDI` toggles.
+- **Main section**: Shows the core disperser controls such as `FREQUENCY`, `MOD`, `FBK`, `STAGES`, `SERIES`, `SHAPE`, `JIT`, `STYLE`, plus the `ALT`, `MIDI`, and `SIDECHAIN` toggles.
 - **IO section**: Click the triangle toggle bar to switch to the expanded IO view. This exposes `INPUT`, `OUTPUT`, `TILT`, `PAN`, `MIX`, `LIM`, filter controls, routing/mode combos, invert options, and chaos toggles.
 - **Filter bar**: In the IO view, the filter bar opens the HP/LP configuration prompt.
 - **MIX MODE**: In the IO view, `INSERT` uses the single `MIX` control. `SEND` exposes separate `DRY LEVEL` and `WET LEVEL` through the split mix control and its numeric prompt.
@@ -63,6 +63,17 @@ When `MIDI` is active, MIDI note tracking overrides the slider target.
 Frequency multiplier for the disperser center.
 The control is non-linear around `1.0x`, so it gives useful low-ratio and high-ratio ranges without feeling cramped.
 At `4.0x`, the base `FREQUENCY` range reaches the 20 kHz effective ceiling.
+
+### SIDECHAIN
+
+Enables external sidechain modulation of the disperser frequency. The sidechain detector adds a positive offset on top of the current `FREQUENCY` / `MOD` / `MIDI` target instead of replacing the base setting, so the normal frequency controls remain meaningful while the external input pushes the disperser upward.
+
+Right-click `SIDECHAIN` to open its prompt:
+
+- `SMOOTH` ranges from `0%` to `100%`; default is `25%`. `0%` is direct, low values keep extra resolution for fast tracking, and higher values increase detector inertia.
+- `TONE` ranges from `250 Hz` to `20 kHz`; default is `5 kHz`. It sets the useful upper sidechain tone limit before frequency-offset modulation.
+
+At full detector level, sidechain can add up to `+5000 Hz` of frequency offset before the usual effective frequency limits are applied.
 
 ### SHAPE (0-100%)
 
@@ -262,6 +273,7 @@ This ordering is important: DISP-TR is not just "all-pass, then mix". The IO sec
 - **Stage distribution**: `SHAPE` spreads stage frequencies around the center with a non-linear mapping
 - **Jitter**: `JIT` uses the ECHO-TR timing-instability model over a DISP-TR equivalent delay (`STAGES x SERIES x all-pass group delay`), then applies deterministic slow/fast sample-and-hold plus tonal flutter to per-series frequency/shape targets and global feedback magnitude
 - **Feedback**: bipolar and sign-preserving
+- **Feedback cleanup**: feedback memory includes a feedback-only low-frequency DC blocker/airbag so rumble or DC does not accumulate in the all-pass loop; the direct wet path is not globally high-passed by this stage.
 - **Series topology**: changing `SERIES` crossfades between old and new chain counts
 - **Fast path**: when smoothed parameters have settled and no series crossfade is active, the processor uses a tighter inner loop
 
@@ -274,6 +286,7 @@ Current smoothing behavior includes:
 - `SHAPE`: smoothed
 - `JIT`: smoothed before its internal movement layers
 - `FBK`: smoothed
+- `SIDECHAIN`: detector smoothing with shared TR-series percentage `SMOOTH` convention
 - `INPUT`, `OUTPUT`, `MIX`: smoothed
 - `DRY LEVEL` / `WET LEVEL` in `SEND`: smoothed
 - `PAN`: smoothed
@@ -318,4 +331,6 @@ Current v1.4 state includes:
 - IO routing section with `MODE IN`, `MODE OUT`, `SUM BUS`, `MIX MODE`, `FILTER POS`, `INV POL`, and `INV STR`
 - dual-stage transparent peak limiter with `WET` and `GLOBAL` placement options
 - smoothed live control handling for core continuous parameters and utility gains
+- external `SIDECHAIN` frequency-offset modulation with shared `SMOOTH` / `TONE` prompt
+- feedback-only low-frequency cleanup to reduce DC/rumble accumulation at high feedback
 - `0-100 ms` MIDI delay prompt plus refined Hz/kHz filter-frequency entry

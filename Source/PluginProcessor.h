@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <JuceHeader.h>
 #include <array>
@@ -20,6 +20,7 @@ public:
 	static constexpr const char* kParamAlt       = "alt";
 	static constexpr const char* kParamFeedback  = "feedback";
 	static constexpr const char* kParamMod       = "mod";
+	static constexpr const char* kParamModHarm    = "mod_harm";
 	static constexpr const char* kParamInput     = "input";
 	static constexpr const char* kParamOutput    = "output";
 	static constexpr const char* kParamMix       = "mix";
@@ -28,8 +29,15 @@ public:
 	static constexpr const char* kParamStyle     = "style";
 	static constexpr const char* kParamMidi      = "midi";
 	static constexpr const char* kParamSidechain = "sidechain";
+	static constexpr const char* kParamSidechainGain   = "sidechain_gain";
 	static constexpr const char* kParamSidechainSmooth = "sidechain_smooth";
-	static constexpr const char* kParamSidechainTone = "sidechain_tone";
+	static constexpr const char* kParamSidechainPol    = "sidechain_pol";
+	static constexpr const char* kParamSidechainHp     = "sidechain_hp";
+	static constexpr const char* kParamSidechainLp     = "sidechain_lp";
+	static constexpr const char* kParamSidechainHpOn   = "sidechain_hp_on";
+	static constexpr const char* kParamSidechainLpOn   = "sidechain_lp_on";
+	static constexpr const char* kParamSidechainHpSlope = "sidechain_hp_slope";
+	static constexpr const char* kParamSidechainLpSlope = "sidechain_lp_slope";
 	static constexpr const char* kParamS0        = "s0";
 	static constexpr const char* kParamS100      = "s100";
 
@@ -72,6 +80,7 @@ public:
 	static constexpr const char* kParamUiHeight  = "ui_height";
 	static constexpr const char* kParamUiPalette = "ui_palette";
 	static constexpr const char* kParamUiFxTail  = "ui_fx_tail";
+	static constexpr const char* kParamUiIoFx    = "ui_io_fx";
 	static constexpr const char* kParamUiColor0  = "ui_color0";
 	static constexpr const char* kParamUiColor1  = "ui_color1";
 	static constexpr const char* kParamUiColor2  = "ui_color2";
@@ -129,9 +138,20 @@ public:
 	static constexpr float kSidechainSmoothMin     = 0.0f;
 	static constexpr float kSidechainSmoothMax     = 1.0f;
 	static constexpr float kSidechainSmoothDefault = 0.25f;
-	static constexpr float kSidechainToneMin       = 250.0f;
-	static constexpr float kSidechainToneMax       = 20000.0f;
-	static constexpr float kSidechainToneDefault   = 5000.0f;
+	static constexpr float kSidechainGainMin       = -144.0f;
+	static constexpr float kSidechainGainMax       =   24.0f;
+	static constexpr float kSidechainGainDefault   =    0.0f;
+	static constexpr float kSidechainPolMin        =   -1.0f;
+	static constexpr float kSidechainPolMax        =    1.0f;
+	static constexpr float kSidechainPolDefault    =    1.0f;
+	static constexpr float kSidechainFilterFreqMin =   20.0f;
+	static constexpr float kSidechainFilterFreqMax = 20000.0f;
+	static constexpr float kSidechainHpDefault     =   20.0f;
+	static constexpr float kSidechainLpDefault     = 20000.0f;
+	static constexpr bool  kSidechainHpOnDefault   = true;
+	static constexpr bool  kSidechainLpOnDefault   = true;
+	static constexpr int   kSidechainHpSlopeDefault = 1;
+	static constexpr int   kSidechainLpSlopeDefault = 1;
 	static constexpr float kSidechainFrequencyOffsetMaxHz = 5000.0f;
 
 	static constexpr float kFilterFreqMin     = 20.0f;
@@ -199,6 +219,10 @@ public:
 
 	void setUiFxTailEnabled (bool shouldEnableFxTail);
 	bool getUiFxTailEnabled() const noexcept;
+	void setUiIoFxEnabled (bool shouldEnableIoFx);
+	bool getUiIoFxEnabled() const noexcept;
+	float getInputMeterPeak() const noexcept { return inputMeterPeak_.load (std::memory_order_relaxed); }
+	float getOutputMeterPeak() const noexcept { return outputMeterPeak_.load (std::memory_order_relaxed); }
 
 	void setUiCustomPaletteColour (int index, juce::Colour colour);
 	juce::Colour getUiCustomPaletteColour (int index) const noexcept;
@@ -229,6 +253,7 @@ private:
 		static constexpr const char* editorHeight = "uiEditorHeight";
 		static constexpr const char* useCustomPalette = "uiUseCustomPalette";
 		static constexpr const char* fxTailEnabled = "uiFxTailEnabled";
+		static constexpr const char* ioFxEnabled = "uiIoFxEnabled";
 		static constexpr const char* midiPort = "midiPort";
 		static constexpr const char* midiDelayMs = "midiDelayMs";
 		static constexpr const char* ioExpanded = "uiIoExpanded";
@@ -405,27 +430,22 @@ private:
 	std::array<PendingMidiEvent, kPendingMidiEventCapacity> pendingMidiEvents_ {};
 	int pendingMidiEventCount_ = 0;
 
+
+public:
+	// Shared biquad type used by wet filters and sidechain detector filters.
+	struct WetFilterBiquadCoeffs { float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f; };
+	struct WetFilterBiquadState  { float z1 = 0.0f, z2 = 0.0f; };
+
+private:
 	std::vector<float> sidechainFrequencyOffsetNorm_;
 	float sidechainDcPrevInL_ = 0.0f;
 	float sidechainDcPrevInR_ = 0.0f;
 	float sidechainDcPrevOutL_ = 0.0f;
 	float sidechainDcPrevOutR_ = 0.0f;
-	struct SidechainToneFilterState
-	{
-		float oneX1 = 0.0f;
-		float oneY1 = 0.0f;
-		float biquadX1 = 0.0f;
-		float biquadX2 = 0.0f;
-		float biquadY1 = 0.0f;
-		float biquadY2 = 0.0f;
-
-		void reset() noexcept
-		{
-			oneX1 = oneY1 = biquadX1 = biquadX2 = biquadY1 = biquadY2 = 0.0f;
-		}
-	};
-	SidechainToneFilterState sidechainToneFilterL_;
-	SidechainToneFilterState sidechainToneFilterR_;
+	WetFilterBiquadState sidechainHpFilterL_[2];
+	WetFilterBiquadState sidechainHpFilterR_[2];
+	WetFilterBiquadState sidechainLpFilterL_[2];
+	WetFilterBiquadState sidechainLpFilterR_[2];
 	float sidechainCarrierSmoothL_ = 0.0f;
 	float sidechainCarrierSmoothR_ = 0.0f;
 	float sidechainRmsEnv_ = 0.0f;
@@ -456,11 +476,7 @@ private:
 	// Pre-allocated dry buffer for mix blend (avoids malloc in processBlock)
 	juce::AudioBuffer<float> dryBuffer;
 
-public:
 	// Wet filter (HP + LP)
-	struct WetFilterBiquadCoeffs { float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f; };
-	struct WetFilterBiquadState  { float z1 = 0.0f, z2 = 0.0f; };
-private:
 	struct WetFilterChannelState
 	{
 		WetFilterBiquadState hp[2];   // up to 2 cascaded sections (24 dB/oct)
@@ -493,13 +509,21 @@ private:
 	std::atomic<float>* altParam = nullptr;
 	std::atomic<float>* feedbackParam = nullptr;
 	std::atomic<float>* modParam = nullptr;
+	std::atomic<float>* modHarmParam = nullptr;
 	std::atomic<float>* mixParam = nullptr;
 	std::atomic<float>* tiltParam = nullptr;
 	std::atomic<float>* styleParam = nullptr;
 	std::atomic<float>* midiParam = nullptr;
 	std::atomic<float>* sidechainParam = nullptr;
+	std::atomic<float>* sidechainGainParam = nullptr;
 	std::atomic<float>* sidechainSmoothParam = nullptr;
-	std::atomic<float>* sidechainToneParam = nullptr;
+	std::atomic<float>* sidechainPolParam = nullptr;
+	std::atomic<float>* sidechainHpParam = nullptr;
+	std::atomic<float>* sidechainLpParam = nullptr;
+	std::atomic<float>* sidechainHpOnParam = nullptr;
+	std::atomic<float>* sidechainLpOnParam = nullptr;
+	std::atomic<float>* sidechainHpSlopeParam = nullptr;
+	std::atomic<float>* sidechainLpSlopeParam = nullptr;
 	std::atomic<float>* s0Param = nullptr;
 	std::atomic<float>* s100Param = nullptr;
 	std::atomic<float>* filterHpFreqParam  = nullptr;
@@ -536,17 +560,20 @@ private:
 	std::atomic<float>* uiHeightParam = nullptr;
 	std::atomic<float>* uiPaletteParam = nullptr;
 	std::atomic<float>* uiFxTailParam = nullptr;
+	std::atomic<float>* uiIoFxParam = nullptr;
 	std::array<std::atomic<float>*, 4> uiColorParams { nullptr, nullptr, nullptr, nullptr };
+	std::atomic<float> inputMeterPeak_ { 0.0f };
+	std::atomic<float> outputMeterPeak_ { 0.0f };
 
 	std::atomic<int> uiEditorWidth { 360 };
 	std::atomic<int> uiEditorHeight { 752 };
 	std::atomic<int> uiUseCustomPalette { 0 };
 	std::atomic<int> uiFxTailEnabled { 0 };
 	std::array<std::atomic<juce::uint32>, 4> uiCustomPalette {
-		std::atomic<juce::uint32> { juce::Colours::white.getARGB() },
+		std::atomic<juce::uint32> { juce::Colour (0xff00ff00).getARGB() },
 		std::atomic<juce::uint32> { juce::Colours::black.getARGB() },
-		std::atomic<juce::uint32> { juce::Colours::white.getARGB() },
-		std::atomic<juce::uint32> { juce::Colours::black.getARGB() }
+		std::atomic<juce::uint32> { juce::Colours::blue.getARGB() },
+		std::atomic<juce::uint32> { juce::Colours::red.getARGB() }
 	};
 
 	// Chaos state (smooth S&H + Drift, per-channel D/G, quadrature F)
