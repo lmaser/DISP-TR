@@ -9,20 +9,7 @@ using namespace TR;
  #include <windows.h>
 #endif
 
-namespace UiStateKeys
-{
-    constexpr const char* editorWidth = "uiEditorWidth";
-    constexpr const char* editorHeight = "uiEditorHeight";
-    constexpr const char* useCustomPalette = "uiUseCustomPalette";
-    constexpr const char* crtEnabled = "uiFxTailEnabled";  // string kept for preset compat
-    constexpr const char* ioFxEnabled = "uiIoFxEnabled";
-    constexpr std::array<const char*, 4> customPalette {
-        "uiCustomPalette0",
-        "uiCustomPalette1",
-        "uiCustomPalette2",
-        "uiCustomPalette3"
-    };
-}
+namespace UiStateKeys = TR::SimpleUiStateKeys;
 
 // â”€â”€ Timer constants â”€â”€
 static constexpr int kCrtTimerHz  = 10;
@@ -1822,9 +1809,9 @@ void DisperserAudioProcessorEditor::openGraphicsPopup()
 {
     lnf.setScheme (activeScheme);
     useCustomPalette = audioProcessor.getUiUseCustomPalette();
-    crtEnabled = audioProcessor.getUiFxTailEnabled();
+    crtEnabled = false;
     ioFxEnabled = audioProcessor.getUiIoFxEnabled();
-    crtEffect.setEnabled (crtEnabled);
+    crtEffect.setEnabled (false);
     applyActivePalette();
 
     TR::openGraphicsPopupShared<DisperserAudioProcessorEditor> (this,
@@ -1958,15 +1945,8 @@ TR::SimpleMainPanelSpec DisperserAudioProcessorEditor::buildMainPanelSpec()
                                             &cachedAmountIntOnly, &cachedSeriesIntOnly, &cachedShapeIntOnly,
                                             &cachedJitterIntOnly, &cachedStyleTextShort };
         for (int i = 0; i < 8; ++i)
-        {
-            TR::SimpleMainPanelRow row;
-            row.cachedFull    = full[i];
-            row.cachedShort   = shrt[i];
-            row.cachedIntOnly = intOnly[i];
-            row.valueArea     = cachedValueAreas_[(size_t) i];
-            row.visible       = true;
-            spec.rows.push_back (row);
-        }
+            TR::addSimpleMainPanelRow (spec, false, full[i], shrt[i], intOnly[i],
+                                       cachedValueAreas_[(size_t) i]);
     }
 
     // Expanded-only rows
@@ -1975,27 +1955,13 @@ TR::SimpleMainPanelSpec DisperserAudioProcessorEditor::buildMainPanelSpec()
                                  const juce::String* full, const juce::String* shrt,
                                  const juce::String* intOnly = nullptr)
         {
-            if (! s.isVisible() || area.getWidth() <= 0) return;
-            TR::SimpleMainPanelRow row;
-            row.cachedFull    = full;
-            row.cachedShort   = shrt;
-            row.cachedIntOnly = intOnly;
-            row.valueArea     = area;
-            row.visible       = true;
-            spec.expandedRows.push_back (row);
+            TR::addSimpleMainPanelRow (spec, true, full, shrt, intOnly, area, s.isVisible());
         };
         addIfVisible (inputSlider,  cachedValueAreas_[8],  &cachedInputTextFull,  &cachedInputTextShort,  &cachedInputIntOnly);
         addIfVisible (outputSlider, cachedValueAreas_[9],  &cachedOutputTextFull, &cachedOutputTextShort, &cachedOutputIntOnly);
         addIfVisible (tiltSlider,   cachedValueAreas_[10], &cachedTiltTextFull,   &cachedTiltTextShort,   &cachedTiltIntOnly);
-        if (filterBar_.isVisible() && cachedFilterValueArea_.getWidth() > 0)
-        {
-            TR::SimpleMainPanelRow row;
-            row.cachedFull  = &cachedFilterTextFull;
-            row.cachedShort = &cachedFilterTextShort;
-            row.valueArea   = cachedFilterValueArea_;
-            row.visible     = true;
-            spec.expandedRows.push_back (row);
-        }
+        TR::addSimpleMainPanelRow (spec, true, &cachedFilterTextFull, &cachedFilterTextShort, nullptr,
+                                   cachedFilterValueArea_, filterBar_.isVisible());
         addIfVisible (panSlider,    cachedPanValueArea_,        &cachedPanTextFull,    &cachedPanTextShort);
         addIfVisible (mixSlider,    cachedValueAreas_[11],      &cachedMixTextFull,    &cachedMixTextShort,   &cachedMixIntOnly);
         addIfVisible (limThresholdSlider, cachedLimThresholdValueArea_, &cachedLimThresholdTextFull, &cachedLimThresholdTextShort, &cachedLimThresholdIntOnly);
@@ -2016,47 +1982,30 @@ TR::SimpleMainPanelSpec DisperserAudioProcessorEditor::buildMainPanelSpec()
 
     // Toggles
     {
-        int W = getWidth();
-        auto addToggle = [&](juce::Button& btn, juce::Rectangle<int> area,
-                              juce::String full, juce::String shrt, int cr)
-        {
-            if (! btn.isVisible()) return;
-            TR::SimpleMainPanelToggle t;
-            t.button    = &btn;
-            t.labelArea = area;
-            t.labelFull = full;
-            t.labelShort = shrt;
-            t.rightCollisionBound = cr;
-            t.visible   = true;
-            t.enabled   = btn.isEnabled();
-            spec.toggles.push_back (t);
-        };
-        addToggle (chaosFilterButton, getChaosFilterLabelArea(), "CHSF", "CHSF",
-                   chaosDelayButton.isVisible() ? chaosDelayButton.getX() - TR::kSimpleToggleLegendCollisionPadPx : W - TR::kSimpleToggleLegendCollisionPadPx);
-        addToggle (chaosDelayButton,
-                   TR::makeSimpleToggleLabelArea (chaosDelayButton, W - TR::kSimpleToggleLegendCollisionPadPx, "CHSD", "CHSD"),
-                   "CHSD", "CHSD", W - TR::kSimpleToggleLegendCollisionPadPx);
-        addToggle (sidechainButton, getSidechainLabelArea(), "SIDECHAIN", "SC", W - TR::kSimpleToggleLegendCollisionPadPx);
+        const int W = getWidth();
+        TR::addSimpleMainPanelToggle (spec, false, chaosFilterButton, getChaosFilterLabelArea(), "CHSF", "CHSF",
+                                      TR::makeSimpleMainPanelRightBoundBefore (chaosDelayButton, W));
+        TR::addSimpleMainPanelToggle (spec, false, chaosDelayButton,
+                                      TR::makeSimpleToggleLabelArea (chaosDelayButton, TR::makeSimpleMainPanelRightBound (W), "CHSD", "CHSD"),
+                                      "CHSD", "CHSD", TR::makeSimpleMainPanelRightBound (W));
+        TR::addSimpleMainPanelToggle (spec, false, sidechainButton, getSidechainLabelArea(), "SIDECHAIN", "SC",
+                                      TR::makeSimpleMainPanelRightBound (W));
     }
 
     // Collapsed toggles
     if (! ioSectionExpanded_)
     {
-        int W = getWidth();
-        spec.collapsedToggles = {
-            { "ALT",  "ALT",  &altButton,    getAltLabelArea(),   midiButton.getX() - TR::kSimpleToggleLegendCollisionPadPx, true, true },
-            { "MIDI", "MIDI", &midiButton,   getMidiLabelArea(),  W - TR::kSimpleToggleLegendCollisionPadPx, true, true },
-        };
+        const int W = getWidth();
+        TR::addSimpleMainPanelToggle (spec, true, altButton, getAltLabelArea(), "ALT", "ALT",
+                                      TR::makeSimpleMainPanelRightBoundBefore (midiButton, W));
+        TR::addSimpleMainPanelToggle (spec, true, midiButton, getMidiLabelArea(), "MIDI", "MIDI",
+                                      TR::makeSimpleMainPanelRightBound (W));
     }
 
     // Info gear
     if (cachedInfoGearPath.isEmpty())
         updateInfoIconCache();
-    if (! cachedInfoGearPath.isEmpty())
-    {
-        spec.infoGearPath = &cachedInfoGearPath;
-        spec.infoGearHole = &cachedInfoGearHole;
-    }
+    TR::setSimpleMainPanelInfoGear (spec, cachedInfoGearPath, cachedInfoGearHole);
 
     return spec;
 }

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <vector>
 #include "DspDebugLog.h"
+#include "../../TR-Shared/SimpleUI/SimpleUIStateKeys.h"
 
 class DisperserAudioProcessor : public juce::AudioProcessor
 {
@@ -249,17 +250,15 @@ private:
 
 	struct UiStateKeys
 	{
-		static constexpr const char* editorWidth = "uiEditorWidth";
-		static constexpr const char* editorHeight = "uiEditorHeight";
-		static constexpr const char* useCustomPalette = "uiUseCustomPalette";
-		static constexpr const char* fxTailEnabled = "uiFxTailEnabled";
-		static constexpr const char* ioFxEnabled = "uiIoFxEnabled";
+		static constexpr const char* editorWidth = TR::SimpleUiStateKeys::editorWidth;
+		static constexpr const char* editorHeight = TR::SimpleUiStateKeys::editorHeight;
+		static constexpr const char* useCustomPalette = TR::SimpleUiStateKeys::useCustomPalette;
+		static constexpr const char* fxTailEnabled = TR::SimpleUiStateKeys::fxTailEnabled;
+		static constexpr const char* ioFxEnabled = TR::SimpleUiStateKeys::ioFxEnabled;
 		static constexpr const char* midiPort = "midiPort";
 		static constexpr const char* midiDelayMs = "midiDelayMs";
 		static constexpr const char* ioExpanded = "uiIoExpanded";
-		static constexpr std::array<const char*, 4> customPalette {
-			"uiCustomPalette0", "uiCustomPalette1", "uiCustomPalette2", "uiCustomPalette3"
-		};
+		static constexpr auto customPalette = TR::SimpleUiStateKeys::customPalette;
 	};
 
 	static float calcAllPassCoeff (float frequency, float sampleRate) noexcept;
